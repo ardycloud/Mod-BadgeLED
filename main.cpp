@@ -238,7 +238,7 @@ void setup() {
     
     // LED Task erstellen
     xTaskCreate(ledTask, "LEDTask", 4096, NULL, 1, &ledTaskHandle);
-    
+
     Serial.println("Setup abgeschlossen");
 }
 

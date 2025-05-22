@@ -1,6 +1,6 @@
 #include "Settings.h"
 
-// Globale Einstellungsvariable
+// Globale Einstellungen
 Settings settings;
 
 // Definition des Dateinamens für die Einstellungen
@@ -8,56 +8,56 @@ const char* settingsFile = "/settings.json";
 
 // Implementierung der Funktionen
 bool saveSettings() {
-    // Aktuelle Werte in die Einstellungsstruktur übernehmen
-    settings.currentMode = gCurrentMode;
+    File file = SPIFFS.open("/settings.json", "w");
+    if (!file) {
+        Serial.println("Fehler beim Öffnen der Einstellungsdatei zum Schreiben");
+        return false;
+    }
+
+    Serial.println("Speichere Einstellungen: Mode=" + String(settings.mode) + 
+                  ", Brightness=" + String(settings.brightness) + 
+                  ", NoiseLevel=" + String(settings.noiseLevel));
+
+    // Aktualisiere die Settings-Struktur mit den aktuellen globalen Werten
+    settings.mode = gCurrentMode;
     settings.brightness = BRIGHTNESS;
     settings.noiseLevel = NOISE_LEVEL;
     settings.animationSpeed = animationSpeed;
     settings.micFrequency = micFrequency;
-
-    StaticJsonDocument<512> doc;
+    // apName und apPassword werden direkt in der WebUI gesetzt
     
-    doc["mode"] = settings.currentMode;
+    Serial.print("Speichere WiFi AP-Name: ");
+    Serial.println(settings.apName);
+    
+    StaticJsonDocument<512> doc;
+    doc["mode"] = settings.mode;
     doc["brightness"] = settings.brightness;
-    doc["sensitivity"] = settings.noiseLevel;
-    doc["speed"] = settings.animationSpeed;
-    doc["frequency"] = settings.micFrequency;
-
-    File file = SPIFFS.open(settingsFile, "w");
-    if (!file) {
-        Serial.println("Fehler beim Öffnen der Einstellungsdatei zum Schreiben!");
-        return false;
-    }
+    doc["noiseLevel"] = settings.noiseLevel;
+    doc["animationSpeed"] = settings.animationSpeed;
+    doc["micFrequency"] = settings.micFrequency;
+    doc["apName"] = settings.apName;
+    doc["apPassword"] = settings.apPassword;
 
     if (serializeJson(doc, file) == 0) {
-        Serial.println("Fehler beim Schreiben der Einstellungen!");
+        Serial.println("Fehler beim Schreiben der Einstellungen");
         file.close();
         return false;
     }
 
     file.close();
+    Serial.println("Einstellungen erfolgreich gespeichert");
     return true;
 }
 
 bool loadSettings() {
-    if (!SPIFFS.begin(true)) {
-        Serial.println("SPIFFS konnte nicht initialisiert werden!");
+    if (!SPIFFS.exists("/settings.json")) {
+        Serial.println("Keine Einstellungsdatei gefunden, verwende Standardwerte");
         return false;
     }
 
-    if (!SPIFFS.exists(settingsFile)) {
-        // Standardwerte setzen wenn keine Datei existiert
-        settings.currentMode = 0;
-        settings.brightness = 5;
-        settings.noiseLevel = 10;
-        settings.animationSpeed = 20;
-        settings.micFrequency = 50;
-        return saveSettings(); // Standardwerte speichern
-    }
-
-    File file = SPIFFS.open(settingsFile, "r");
+    File file = SPIFFS.open("/settings.json", "r");
     if (!file) {
-        Serial.println("Einstellungsdatei konnte nicht geöffnet werden!");
+        Serial.println("Fehler beim Öffnen der Einstellungsdatei zum Lesen");
         return false;
     }
 
@@ -66,19 +66,23 @@ bool loadSettings() {
     file.close();
 
     if (error) {
-        Serial.println("Fehler beim Parsen der JSON Datei!");
+        Serial.println("Fehler beim Parsen der Einstellungen");
         return false;
     }
 
-    // Einstellungen laden
-    settings.currentMode = doc["mode"] | 0;
+    settings.mode = doc["mode"] | 1;
     settings.brightness = doc["brightness"] | 5;
-    settings.noiseLevel = doc["sensitivity"] | 10;
-    settings.animationSpeed = doc["speed"] | 20;
-    settings.micFrequency = doc["frequency"] | 50;
+    settings.noiseLevel = doc["noiseLevel"] | 10;
+    settings.animationSpeed = doc["animationSpeed"] | 20;
+    settings.micFrequency = doc["micFrequency"] | 50;
+    settings.apName = doc["apName"] | "LED-Badge";
+    settings.apPassword = doc["apPassword"] | "";
+
+    Serial.print("Geladene Einstellungen: WiFi AP-Name=");
+    Serial.println(settings.apName);
 
     // Globale Variablen aktualisieren
-    gCurrentMode = settings.currentMode;
+    gCurrentMode = settings.mode;
     BRIGHTNESS = settings.brightness;
     NOISE_LEVEL = settings.noiseLevel;
     animationSpeed = settings.animationSpeed;
