@@ -70,7 +70,9 @@ public:
             Wire.setTimeOut(200);  // 200ms Timeout
 
             // Versuche, den Chip zu resetten
-            writeRegister(0x14, 0x80); // Soft Reset
+            if (!writeRegister(0x14, 0x80)) { // Soft Reset
+                addBqLog("Fehler beim Soft Reset");
+            }
             delay(500); // Längere Wartezeit nach Reset
             addBqLog("Soft Reset durchgeführt");
 
@@ -82,7 +84,9 @@ public:
             }
 
             // ADC und Temperaturmessung aktivieren
-            writeRegister(0x07, 0x95); // ADC aktivieren, TS-Überwachung aktivieren
+            if (!writeRegister(0x07, 0x95)) { // ADC aktivieren, TS-Überwachung aktivieren
+                addBqLog("Fehler beim Aktivieren des ADC");
+            }
             delay(100);
             Serial.println("🛠️ ADC aktiviert, TS-Überwachung aktiviert");
             addBqLog("ADC aktiviert, TS-Überwachung aktiviert");
@@ -92,7 +96,9 @@ public:
             Serial.printf("ADC Status nach Aktivierung (REG07): 0x%02X\n", reg07);
             
             // Register 0x06: IR-Kompensation und Thermische Regulierung aktivieren
-            writeRegister(0x06, 0x32); // Thermische Regulierung aktivieren
+            if (!writeRegister(0x06, 0x32)) { // Thermische Regulierung aktivieren
+                addBqLog("Fehler beim Aktivieren der thermischen Regulierung");
+            }
             delay(100);
             Serial.println("🛠️ Thermische Regulierung aktiviert");
             addBqLog("Thermische Regulierung aktiviert");
@@ -102,7 +108,9 @@ public:
             addBqLog("FAULT-Register vor Reset: 0x" + String(fault, HEX));
             
             // Register 0x05: JEITA aktivieren/deaktivieren
-            writeRegister(0x05, 0x00); // JEITA deaktivieren
+            if (!writeRegister(0x05, 0x00)) { // JEITA deaktivieren
+                addBqLog("Fehler beim Deaktivieren von JEITA");
+            }
             delay(100);
             addBqLog("JEITA (temperaturabhängige Ladung) deaktiviert");
 
@@ -115,13 +123,19 @@ public:
             delay(100);
 
             // SYS min voltage auf 3.3V setzen
-            writeRegister(0x03, 0x1A);
+            if (!writeRegister(0x03, 0x1A)) {
+                addBqLog("Fehler beim Setzen der SYS min voltage");
+            }
             delay(100);
             Serial.println("⚙️ SYS min voltage auf 3.3V gesetzt");
             addBqLog("SYS min voltage auf 3.3V gesetzt");
 
-            writeRegister(0x01, 0x3C); // Safety Timer deaktivieren
-            writeRegister(0x08, 0x7A); // Watchdog deaktivieren
+            if (!writeRegister(0x01, 0x3C)) { // Safety Timer deaktivieren
+                addBqLog("Fehler beim Deaktivieren des Safety Timers");
+            }
+            if (!writeRegister(0x08, 0x7A)) { // Watchdog deaktivieren
+                addBqLog("Fehler beim Deaktivieren des Watchdogs");
+            }
             delay(100);
             Serial.println("⏱️ Watchdog deaktiviert");
             addBqLog("Safety Timer und Watchdog deaktiviert");
@@ -130,7 +144,9 @@ public:
             uint8_t reg0A = readRegister(0x0A);
             if (reg0A != 0xFF) {
                 // BATFET-Kontrolle deaktivieren und STAT-Pin auf Hi-Z setzen
-                writeRegister(0x0A, (reg0A & ~0x08) | 0x00);
+                if (!writeRegister(0x0A, (reg0A & ~0x08) | 0x00)) {
+                    addBqLog("Fehler beim Deaktivieren des STAT-Pin-Blinkens");
+                }
                 delay(100);
                 Serial.println("🔧 STAT-Pin-Blinken deaktiviert");
                 addBqLog("STAT-Pin-Blinken deaktiviert");
@@ -175,8 +191,10 @@ public:
                 // Fehler zurücksetzen
                 clearFaults();
                 
-                // Dann normale DPDM-Erkennung starten
-                forceDPDMDetection();
+                // REMOVED: forceDPDMDetection() um Charging-Resets zu verhindern
+                // Das forced protocol resettet den Ladevorgang ständig
+                Serial.println("ℹ️ DPDM-Erkennung übersprungen um Charging-Resets zu vermeiden");
+                addBqLog("DPDM-Erkennung übersprungen um Charging-Resets zu vermeiden");
                 delay(200);
                 
                 // Ladeparameter neu setzen
@@ -208,7 +226,7 @@ public:
         uint8_t reg = readRegister(0x02);
         if (reg != 0xFF) {
             reg |= 0x80;
-            writeRegister(0x02, reg);
+            (void)writeRegister(0x02, reg);
             Serial.println("🔁 DPDM-Erkennung neu gestartet");
             addBqLog("DPDM-Erkennung neu gestartet");
         }
@@ -219,75 +237,84 @@ public:
         clearFaults();
         
         // Eingangs-Strom setzen (1500mA)
-        writeRegister(0x00, 0x30);
+        (void)writeRegister(0x00, 0x30);
         
-        // Lade-Strom setzen (Standard: 2048mA = 0x1C)
+        // Lade-Strom setzen (Standard: 2048mA = 0x20 für Register 0x02)
         // Prüfen, ob der zuletzt angeforderte Ladestrom gesetzt ist
         if (lastRequestedChargeCurrent > 0) {
             setChargeCurrent(lastRequestedChargeCurrent);
         } else {
-            // Standard-Ladestrom setzen
-            writeRegister(0x04, 0x1C);
-            addBqLog("Ladeparameter gesetzt: Input=1500mA, Charge=2048mA");
+            // Standard-Ladestrom setzen - KORRIGIERT: Register 0x02 für Charge Current
+            // 2048mA / 64mA = 32 = 0x20
+            (void)writeRegister(0x02, 0x20);
+            addBqLog("Ladeparameter gesetzt: Input=1500mA, Charge=2048mA (Register 0x02)");
         }
         
         // Jetzt die Register kontrollieren
         uint8_t reg00 = readRegister(0x00);
-        uint8_t reg04 = readRegister(0x04);
+        uint8_t reg02 = readRegister(0x02);  // Korrigiert: 0x02 statt 0x04
         
         addBqLog("Lade-Register überprüft: REG00=0x" + String(reg00, HEX) + 
-                 ", REG04=0x" + String(reg04, HEX));
+                 ", REG02=0x" + String(reg02, HEX) + " (Charge Current)");
         
         Serial.println("⚡ Ladeparameter neu gesetzt");
     }
 
-    // Setzt den Ladestrom in mA
-    void setChargeCurrent(int mA) {
-        // Speichern des angeforderten Stroms
-        lastRequestedChargeCurrent = mA;
+    bool setChargeCurrent(int currentMA) {
+        // Ladestrom-Limitierung implementieren
+        int limitedCurrent = currentMA;
         
-        // BQ25895 erlaubt Ladeströme von 0 bis 5056mA
-        // Register 0x04 bits 0-6 steuern den Ladestrom
-        // Formel: I_charge = 64mA + REG04[6:0] * 64mA
+        // Erlaubte Werte: 500mA, 1000mA, 1500mA, 2000mA
+        if (currentMA <= 500) {
+            limitedCurrent = 500;
+        } else if (currentMA <= 1000) {
+            limitedCurrent = 1000;
+        } else if (currentMA <= 1500) {
+            limitedCurrent = 1500;
+        } else if (currentMA <= 2000) {
+            limitedCurrent = 2000;
+        } else {
+            // Maximum auf 2A begrenzen für Sicherheit
+            limitedCurrent = 2000;
+            Serial.printf("WARNUNG: Ladestrom auf 2A begrenzt (angefordert: %dmA)\n", currentMA);
+        }
         
-        // Sicherstellen, dass der Wert im gültigen Bereich liegt
-        if (mA < 0) mA = 0;
-        if (mA > 5000) mA = 5000;
+        // KRITISCH: Speichere den angeforderten Wert für spätere Verwendung
+        lastRequestedChargeCurrent = limitedCurrent;
         
-        // Wert für Register berechnen
-        uint8_t regValue = (mA / 64);
-        if (regValue > 0x7F) regValue = 0x7F; // Max 7-bit Wert
+        // CRITICAL FIX: Berechnung des Register-Werts für Fast Charge Current (Register 0x02 - NICHT 0x04!)
+        // Register 0x04 ist für CHARGE_VOLTAGE_CTRL, Register 0x02 ist für CHARGE_CURRENT_CTRL!
+        // Formel: ICHG = 0mA + REG02[6:0] × 64mA
+        // Minimum: 0mA, Maximum: 5056mA (aber wir begrenzen auf 2A)
+        int regValue = limitedCurrent / 64;
         
-        // Aktuelles Register auslesen und nur die Bits 0-6 ändern
-        uint8_t reg = readRegister(0x04);
-        if (reg != 0xFF) {
-            // Alte Bits speichern
-            String oldRegValue = "0x" + String(reg, HEX);
+        // Register 0x02 lesen und nur die Ladestrom-Bits ändern (Bits 6:0)
+        uint8_t reg02 = readRegister(0x02);
+        if (reg02 == 0xFF) {
+            Serial.println("Fehler beim Lesen von Register 0x02 (CHARGE_CURRENT_CTRL)");
+            return false;
+        }
+        
+        // Nur die unteren 7 Bits (Ladestrom) ändern, obere Bits beibehalten
+        uint8_t newReg02 = (reg02 & 0x80) | (regValue & 0x7F);
+        
+        bool success = writeRegister(0x02, newReg02);
+        
+        if (success) {
+            Serial.printf("Ladestrom erfolgreich auf %dmA gesetzt (Register 0x02: 0x%02X)\n", limitedCurrent, newReg02);
             
-            // Setzen des Ladestroms
-            reg = (reg & 0x80) | regValue; // Bit 7 behalten, 0-6 setzen
-            writeRegister(0x04, reg);
-            
-            // Nach dem Schreiben nochmals auslesen zum Vergleich
-            delay(10);
-            uint8_t newReg = readRegister(0x04);
-            
-            Serial.print("⚡ Ladestrom gesetzt auf: ");
-            Serial.print(mA);
-            Serial.println("mA");
-            
-            addBqLog("Ladestrom auf " + String(mA) + "mA gesetzt: " + 
-                    "Alt=" + oldRegValue + ", Neu=0x" + String(newReg, HEX) + 
-                    ", Raw=" + String(regValue, HEX));
-            
-            // Prüfen, ob der Wert korrekt geschrieben wurde
-            if ((newReg & 0x7F) != regValue) {
-                addBqLog("WARNUNG: Ladestrom nicht korrekt gesetzt! Erwartet: 0x" + 
-                        String(regValue, HEX) + ", Tatsächlich: 0x" + String(newReg & 0x7F, HEX));
+            // Verifikation: Register zurücklesen
+            uint8_t verification = readRegister(0x02);
+            if (verification != newReg02) {
+                Serial.printf("WARNUNG: Verifikation fehlgeschlagen! Erwartet: 0x%02X, Gelesen: 0x%02X\n", newReg02, verification);
+            } else {
+                Serial.println("Ladestrom-Einstellung verifiziert");
             }
         } else {
-            addBqLog("ERROR: Konnte Register 0x04 nicht lesen für Ladestrom-Einstellung");
+            Serial.printf("Fehler beim Setzen des Ladestroms auf %dmA\n", limitedCurrent);
         }
+        
+        return success;
     }
 
     void printStatus() {
@@ -374,9 +401,6 @@ public:
             return "Fehler";
         }
         
-        // Debug-Ausgabe des kompletten Status-Registers
-        Serial.printf("Status Register (0x0B): 0x%02X\n", status);
-        
         // Extrahiere die Temperatur-Status-Bits (Bits 2:0)
         uint8_t tempStatus = status & 0x07;
         
@@ -390,10 +414,6 @@ public:
             default: statusText = "Unbekannt"; break;
         }
         
-        // Debug-Ausgabe
-        Serial.printf("Temperatur-Status: 0x%02X -> %s\n", tempStatus, statusText.c_str());
-        addBqLog("Temperatur-Status: " + statusText + " (0x" + String(tempStatus, HEX) + ")");
-        
         return statusText;
     }
 
@@ -401,37 +421,29 @@ public:
         // ADC aktivieren falls nötig
         uint8_t reg07 = readRegister(0x07);
         if (reg07 != 0xFF && !(reg07 & 0x80)) {
-            writeRegister(0x07, reg07 | 0x80); // ADC aktivieren
-            delay(50); // Warte auf ADC-Start
+            (void)writeRegister(0x07, reg07 | 0x80);
+            delay(50);
         }
 
-        // Batteriespannung aus Register 0x0E lesen
-        uint8_t regVal = readRegister(REG_0E_ADC_VBAT_MSB);
+        // VBAT-Spannung aus Register 0x0E lesen
+        uint8_t regVal = readRegister(0x0E);
         
         if (regVal != 0xFF) {
-            // Korrigierte Berechnung mit Kalibrierungsfaktor
-            // (Anpassung von 20mV pro Schritt basierend auf Messwert)
-            float voltage = regVal * 0.020f * 2.26f; // 20mV pro Schritt mit Kalibrierfaktor 2.26
+            // KORRIGIERT: Berechnung laut BQ25895-Datenblatt
+            // VBAT ADC: 2.304V + ADC_Code × 20mV
+            float voltage = 2.304f + (regVal * 0.02f);
             
-            // Debug-Ausgabe
-            Serial.printf("VBAT Debug: Register=0x%02X, Raw=%.2fV, Korrigiert=%.3fV\n", 
-                         regVal, regVal * 0.02f, voltage);
-            
-            // Log-Ausgabe jede Minute
-            static unsigned long lastVbatLogTime = 0;
-            unsigned long currentTime = millis();
-            if (currentTime - lastVbatLogTime > 60000) {
-                addBqLog(String("VBAT: Register=0x") + String(regVal, HEX) + 
-                       ", Raw=" + String(regVal * 0.02f, 2) + "V" +
-                       ", Korrigiert=" + String(voltage, 3) + "V");
-                lastVbatLogTime = currentTime;
+            // DEBUG: Nur gelegentlich ausgeben um serielle Schnittstelle nicht zu überlasten
+            static unsigned long lastVbatDebug = 0;
+            if (millis() - lastVbatDebug > 10000) { // Alle 10 Sekunden
+                Serial.printf("🔍 VBAT DEBUG: Register=0x%02X (%d), Berechnet=%.3fV\n", regVal, regVal, voltage);
+                lastVbatDebug = millis();
             }
             
             return voltage;
         }
         
-        Serial.println("⚠️ Fehler beim Lesen des VBAT-Registers");
-        addBqLog("ERROR: Kann VBAT-Register nicht lesen");
+        Serial.printf("❌ FEHLER: VBAT-Register lesen fehlgeschlagen (0x%02X)\n", regVal);
         return -1.0f;
     }
 
@@ -439,19 +451,18 @@ public:
         // ADC aktivieren falls nötig
         uint8_t reg07 = readRegister(0x07);
         if (reg07 != 0xFF && !(reg07 & 0x80)) {
-            writeRegister(0x07, reg07 | 0x80); // ADC aktivieren
+            (void)writeRegister(0x07, reg07 | 0x80);
             delay(50);
         }
 
         // System-Spannung aus Register 0x0F lesen
-        uint8_t regVal = readRegister(REG_0F_ADC_VBAT_LSB);
+        uint8_t regVal = readRegister(0x0F);
         
         if (regVal != 0xFF) {
-            // Korrigierte Berechnung mit Kalibrierungsfaktor
-            float vsys = regVal * 0.020f * 2.26f; // 20mV pro Schritt mit Kalibrierfaktor 2.26
-            Serial.printf("VSYS Debug: Register=0x%02X, Raw=%.2fV, Korrigiert=%.3fV\n", 
-                         regVal, regVal * 0.02f, vsys);
-            return vsys;
+            // KORRIGIERT: Berechnung laut BQ25895-Datenblatt (ohne falschen Korrekturfaktor)
+            float voltage = 2.304f + (regVal * 0.02f);  // 2.304V + (ADC_Code × 20mV)
+            
+            return voltage;
         }
         return -1.0f;
     }
@@ -460,7 +471,7 @@ public:
         // ADC aktivieren falls nötig
         uint8_t reg07 = readRegister(0x07);
         if (reg07 != 0xFF && !(reg07 & 0x80)) {
-            writeRegister(0x07, reg07 | 0x80);
+            (void)writeRegister(0x07, reg07 | 0x80);
             delay(50);
         }
 
@@ -468,10 +479,17 @@ public:
         uint8_t regVal = readRegister(0x11);
         
         if (regVal != 0xFF) {
-            // Korrigierte Berechnung mit Kalibrierungsfaktor (15.2V zu 5V: Faktor 0.33)
-            float vbus = regVal * 0.1f * 0.33f; // 100mV pro Schritt mit Korrekturfaktor
-            Serial.printf("VBUS Debug: Register=0x%02X, Raw=%.2fV, Korrigiert=%.2fV\n", 
-                         regVal, regVal * 0.1f, vbus);
+            // KORRIGIERT: Berechnung laut BQ25895-Datenblatt für VBUS
+            // VBUS ADC: 2.6V + ADC_Code × 64mV (korrekte Formel!)
+            float vbus = 2.6f + (regVal * 0.064f);
+            
+            // DEBUG: Nur gelegentlich ausgeben um serielle Schnittstelle nicht zu überlasten
+            static unsigned long lastVbusDebug = 0;
+            if (millis() - lastVbusDebug > 15000) { // Alle 15 Sekunden
+                Serial.printf("🔍 VBUS DEBUG: Register=0x%02X (%d), Roh=%.2fV\n", regVal, regVal, vbus);
+                lastVbusDebug = millis();
+            }
+            
             return vbus;
         }
         return -1.0f;
@@ -481,7 +499,7 @@ public:
         // ADC aktivieren falls nötig
         uint8_t reg07 = readRegister(0x07);
         if (reg07 != 0xFF && !(reg07 & 0x80)) {
-            writeRegister(0x07, reg07 | 0x80);
+            (void)writeRegister(0x07, reg07 | 0x80);
             delay(50);
         }
 
@@ -491,7 +509,7 @@ public:
         if (regVal != 0xFF) {
             // Berechnung laut Datenblatt
             float ichg = regVal * 0.05f; // 50mA pro Schritt
-            Serial.printf("ICHG Debug: Register=0x%02X, Current=%.3fA\n", regVal, ichg);
+            
             return ichg;
         }
         return -1.0f;
@@ -501,7 +519,7 @@ public:
         // ADC aktivieren falls nötig
         uint8_t reg07 = readRegister(0x07);
         if (reg07 != 0xFF && !(reg07 & 0x80)) {
-            writeRegister(0x07, reg07 | 0x80);
+            (void)writeRegister(0x07, reg07 | 0x80);
             delay(50);
         }
 
@@ -511,21 +529,6 @@ public:
         if (regVal != 0xFF) {
             // Berechnung laut Datenblatt
             float iin = regVal * 0.05f; // 50mA pro Schritt
-            
-            // Prüfe, ob Register 0x00 die Strombegrenzung enthält
-            uint8_t ilimReg = readRegister(0x00);
-            uint8_t ilimBits = (ilimReg >> 0) & 0x3F; // Bits 0-5 für IINLIM
-            float maxCurrent = ilimBits * 0.05f + 0.1f; // 50mA pro Schritt + 100mA Offset
-            
-            Serial.printf("IIN Debug: Register=0x%02X, Wert=%.3fA, ILIM=%.3fA\n", 
-                         regVal, iin, maxCurrent);
-            
-            // Geben Hinweis aus, falls IIN verdächtig nahe am Limit ist
-            if (abs(iin - maxCurrent) < 0.1f) {
-                Serial.println("Hinweis: IIN ist nahe am konfigurierten Limit, möglicherweise Strombegrenzung aktiv");
-                addBqLog("Hinweis: IIN = " + String(iin, 2) + "A ist nahe am Limit " + 
-                        String(maxCurrent, 2) + "A");
-            }
             
             return iin;
         }
@@ -562,7 +565,7 @@ public:
             if (reg07 != 0xFF) {
                 if (!(reg07 & 0x80)) { // ADC nicht aktiv
                     Serial.println("ADC nicht aktiv, aktiviere...");
-                    writeRegister(0x07, reg07 | 0x80); // ADC aktivieren
+                    (void)writeRegister(0x07, reg07 | 0x80); // ADC aktivieren
                     delay(100); // Warte auf ADC-Start
                     
                     // Prüfe ADC-Status nach Aktivierung
@@ -637,7 +640,7 @@ public:
         return (stat != 0xFF && (stat & 0xE0));
     }
 
-    void writeRegister(uint8_t reg, uint8_t value) {
+    bool writeRegister(uint8_t reg, uint8_t value) {
         try {
             Wire.beginTransmission(BQ25895_ADDRESS);
             Wire.write(reg);
@@ -646,45 +649,35 @@ public:
             
             if (error != 0) {
                 Serial.printf("❌ I2C Fehler beim Schreiben von Register 0x%02X: %d\n", reg, error);
-                return;
+                return false;
             }
             
             Serial.printf("Register 0x%02X = 0x%02X geschrieben\n", reg, value);
+            return true;
         } catch (...) {
             Serial.println("❌ Fehler beim Schreiben an I2C");
             addBqLog("ERROR: Kann Register 0x" + String(reg, HEX) + " nicht schreiben");
+            return false;
         }
     }
 
     uint8_t readRegister(uint8_t reg) {
-        try {
-            Wire.beginTransmission(BQ25895_ADDRESS);
-            Wire.write(reg);
-            byte error = Wire.endTransmission(false);
-            
-            if (error != 0) {
-                Serial.printf("❌ I2C Fehler bei Register 0x%02X: %d\n", reg, error);
-                return 0xFF;
-            }
-
-            // Warte kurz vor dem Lesen
-            delay(2);
-
-            byte bytesReceived = Wire.requestFrom((int)BQ25895_ADDRESS, (int)1);
-            if (bytesReceived != 1) {
-                Serial.printf("❌ Keine Daten von Register 0x%02X (erhalten: %d Bytes)\n", reg, bytesReceived);
-                return 0xFF;
-            }
-
-            uint8_t value = Wire.read();
-            Serial.printf("Register 0x%02X = 0x%02X\n", reg, value);
-            
-            return value;
-        } catch (...) {
-            Serial.printf("❌ Fehler beim Lesen von Register 0x%02X\n", reg);
-            addBqLog("ERROR: Kann Register 0x" + String(reg, HEX) + " nicht lesen");
+        Wire.beginTransmission(BQ25895_ADDRESS);
+        Wire.write(reg);
+        
+        uint8_t error = Wire.endTransmission(false);
+        if (error != 0) {
             return 0xFF;
         }
+        
+        Wire.requestFrom((uint8_t)BQ25895_ADDRESS, (uint8_t)1);
+        
+        if (Wire.available()) {
+            uint8_t value = Wire.read();
+            return value;
+        }
+        
+        return 0xFF;
     }
 
     // Funktion zum Zurücksetzen aller Fehlerbedingungen
@@ -693,7 +686,7 @@ public:
         uint8_t reg02 = readRegister(0x02);
         if (reg02 != 0xFF) {
             // Force DPDM detection to reset ADC
-            writeRegister(0x02, reg02 | 0x80);
+            (void)writeRegister(0x02, reg02 | 0x80);
             delay(50);
             addBqLog("DPDM Detection erzwungen");
         }
@@ -708,11 +701,11 @@ public:
         }
         
         // REG00 neu schreiben (klärt manchmal Fehler)
-        writeRegister(0x00, 0x30);
+        (void)writeRegister(0x00, 0x30);
         delay(10);
         
         // REG01 neu schreiben (klärt manchmal Fehler)
-        writeRegister(0x01, 0x3C);
+        (void)writeRegister(0x01, 0x3C);
         delay(10);
     }
 

@@ -10,6 +10,7 @@
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
 #include <time.h>  // Für time()-Funktionen
+#include <U8g2_for_Adafruit_GFX.h>  // Für Unicode-Support
 
 // Externe Variablen
 extern BQ25895* charger;
@@ -35,6 +36,9 @@ float lastBatteryVoltage = 0.0f;
 // Display-Objekt (2.9" WeAct b/w/r)
 DISPLAY_TYPE display(GxEPD2_290_C90c(/*CS=*/ 10, /*DC=*/ 9, /*RST=*/ 8, /*BUSY=*/ 13));
 
+// U8g2-Instanz für Unicode-Support
+U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
+
 // Display-Status
 bool displayAvailable = false;
 
@@ -45,7 +49,7 @@ bool fullDisplayInitialized = true; // Standardmäßig auf true, um erste Initia
 bool preferBWPartialUpdate = true; // Standard: Verwende optimiertes BW-Update
 
 // Display-Inhalte
-DisplayContent displayContent = {"ArdyMoon", "", "", "", false};
+DisplayContent displayContent = {"ArdyMoon", "", "", "", false, true};
 
 // Task Handle und Queue
 TaskHandle_t displayTaskHandle = NULL;
@@ -94,15 +98,28 @@ void drawDisplayContent() {
     
     display.fillScreen(bgColor);
     
-    // Name in Rot mit größerer Schrift, zentriert oben
-    display.setFont(&FreeMonoBold18pt7b);
-    display.setTextColor(accentColor);
-    int16_t tbx, tby; 
-    uint16_t tbw, tbh;
-    display.getTextBounds(displayContent.name, 0, 0, &tbx, &tby, &tbw, &tbh);
-    uint16_t x = (DISPLAY_WIDTH - tbw) / 2;
-    display.setCursor(x, 30);
-    display.print(displayContent.name);
+    // U8g2-Fonts für Unicode-Support initialisieren
+    u8g2Fonts.begin(display);
+    
+    // Name mit wählbarer Farbe und Unicode-Support, zentriert oben
+    u8g2Fonts.setFontMode(1);  // Transparenter Hintergrund (1 = transparent, 0 = solid)
+    u8g2Fonts.setFont(u8g2_font_ncenB24_tr);  // Größerer verfügbarer Font (24px, fett)
+    
+    // Name-Farbe basierend auf Einstellung wählen
+    uint16_t nameColor;
+    if (displayContent.nameColorRed) {
+        nameColor = GxEPD_RED;  // Rot
+    } else {
+        nameColor = fgColor;    // Schwarz oder Weiß je nach Hintergrund
+    }
+    u8g2Fonts.setForegroundColor(nameColor);
+    u8g2Fonts.setBackgroundColor(bgColor);  // Explizit Hintergrundfarbe setzen
+    
+    // Text-Breite für Zentrierung berechnen
+    int16_t nameWidth = u8g2Fonts.getUTF8Width(displayContent.name.c_str());
+    uint16_t x = (DISPLAY_WIDTH - nameWidth) / 2;
+    u8g2Fonts.setCursor(x, 30);  // Höher positioniert (war 40)
+    u8g2Fonts.print(displayContent.name);
     
     // Trennlinie unter dem Namen (volle Breite)
     display.drawLine(0, LINE_Y_POS, DISPLAY_WIDTH, LINE_Y_POS, fgColor);
@@ -110,66 +127,96 @@ void drawDisplayContent() {
     // Bildanzeige
     bool hasImage = false;
     if (displayContent.imagePath.length() > 0 && SPIFFS.exists(displayContent.imagePath)) {
-        File imageFile = SPIFFS.open(displayContent.imagePath, "r");
-        if (imageFile) {
-            hasImage = true;
-            display.drawRect(IMAGE_X_POS, IMAGE_Y_POS, IMAGE_SIZE, IMAGE_SIZE, fgColor);
-            display.drawLine(IMAGE_X_POS, IMAGE_Y_POS, 
-                         IMAGE_X_POS + IMAGE_SIZE, IMAGE_Y_POS + IMAGE_SIZE, fgColor);
-            display.drawLine(IMAGE_X_POS + IMAGE_SIZE, IMAGE_Y_POS, 
-                         IMAGE_X_POS, IMAGE_Y_POS + IMAGE_SIZE, fgColor);
-            imageFile.close();
+        hasImage = true;
+        
+        // Versuche das echte Bild zu laden und anzuzeigen
+        Serial.printf("🖼️ Lade Bild: %s\n", displayContent.imagePath.c_str());
+        Serial.printf("📍 Bildposition: x=%d, y=%d, Größe=%dx%d\n", IMAGE_X_POS, IMAGE_Y_POS, IMAGE_SIZE, IMAGE_SIZE);
+        
+        // Rahmen um das Bild zeichnen
+        display.drawRect(IMAGE_X_POS - 1, IMAGE_Y_POS - 1, IMAGE_SIZE + 2, IMAGE_SIZE + 2, fgColor);
+        
+        // Versuche echte Bitmap-Dekodierung
+        bool imageLoaded = drawBitmapFromFile(displayContent.imagePath, IMAGE_X_POS, IMAGE_Y_POS, fgColor, bgColor);
+        
+        if (!imageLoaded) {
+            // Fallback: Platzhalter-Symbol wenn Dekodierung fehlschlägt
+            Serial.println("❌ Bitmap-Dekodierung fehlgeschlagen, zeige Fallback-Symbol");
+            display.fillRect(IMAGE_X_POS, IMAGE_Y_POS, IMAGE_SIZE, IMAGE_SIZE, bgColor);
+            
+            // Einfaches Kamera-Symbol als Fallback
+            int centerX = IMAGE_X_POS + IMAGE_SIZE / 2;
+            int centerY = IMAGE_Y_POS + IMAGE_SIZE / 2;
+            
+            display.fillRect(centerX - 12, centerY - 8, 24, 16, fgColor);
+            display.fillRect(centerX - 10, centerY - 6, 20, 12, bgColor);
+            display.fillCircle(centerX, centerY, 6, fgColor);
+            display.fillCircle(centerX, centerY, 4, bgColor);
+            display.fillRect(centerX - 16, centerY - 10, 6, 4, fgColor);
+            
+            Serial.println("📷 Fallback-Kamera-Symbol angezeigt");
+        } else {
+            Serial.println("✅ Bild erfolgreich geladen und angezeigt");
         }
+    } else {
+        Serial.printf("❌ Kein Bild gefunden: imagePath='%s', exists=%s\n", 
+                     displayContent.imagePath.c_str(), 
+                     SPIFFS.exists(displayContent.imagePath) ? "ja" : "nein");
     }
     
-    // Beschreibung
-    display.setFont(&FreeSans9pt7b);
-    display.setTextColor(fgColor);
+    // Beschreibung mit Unicode-Support - KORRIGIERT: Ermögliche 3 Zeilen
+    u8g2Fonts.setFont(u8g2_font_ncenB14_tr);  // Kleinerer Font für Beschreibung (14px, fett)
+    u8g2Fonts.setFontMode(1);  // Transparenter Hintergrund (1 = transparent, 0 = solid)
+    u8g2Fonts.setForegroundColor(fgColor);
+    u8g2Fonts.setBackgroundColor(bgColor);  // Explizit Hintergrundfarbe setzen
+    
     String desc = displayContent.description;
     int currentY = DESC_Y_POS;
-    int lineHeight = 20;
+    int lineHeight = 18;  // Angepasst für 14px Font
     int maxWidth = hasImage ? (IMAGE_X_POS - 20) : (DISPLAY_WIDTH - 20);
     String currentLine = "";
+    int lineCount = 0;
+    const int maxLines = 3; // Maximal 3 Zeilen für Beschreibung
     
-    for (int i = 0; i < desc.length(); i++) {
+    for (int i = 0; i < desc.length() && lineCount < maxLines; i++) {
         currentLine += desc[i];
-        display.getTextBounds(currentLine.c_str(), 0, 0, &tbx, &tby, &tbw, &tbh);
+        int16_t lineWidth = u8g2Fonts.getUTF8Width(currentLine.c_str());
         
-        if (tbw > maxWidth || desc[i] == '\n') {
-            display.setCursor(10, currentY);
-            display.print(currentLine);
+        if (lineWidth > maxWidth || desc[i] == '\n') {
+            u8g2Fonts.setCursor(10, currentY);
+            u8g2Fonts.print(currentLine);
             currentY += lineHeight;
+            lineCount++;
             currentLine = "";
-            
-            if (currentY >= TELEGRAM_Y_POS - lineHeight) {
-                break;
-            }
         }
     }
     
-    if (currentLine.length() > 0 && currentY < TELEGRAM_Y_POS - lineHeight) {
-        display.setCursor(10, currentY);
-        display.print(currentLine);
+    // Letzte Zeile ausgeben, falls noch Platz
+    if (currentLine.length() > 0 && lineCount < maxLines) {
+        u8g2Fonts.setCursor(10, currentY);
+        u8g2Fonts.print(currentLine);
     }
     
-    // Telegram Handle rechts unten
+    // Telegram Handle - Position angepasst wenn Bild vorhanden
     if (displayContent.telegram.length() > 0) {
+        u8g2Fonts.setFont(u8g2_font_ncenB12_tr);  // Kleinerer Font für Telegram (12px, fett)
+        u8g2Fonts.setFontMode(1);  // Transparenter Hintergrund (1 = transparent, 0 = solid)
+        u8g2Fonts.setForegroundColor(fgColor);
+        u8g2Fonts.setBackgroundColor(bgColor);  // Explizit Hintergrundfarbe setzen
         String telegramHandle = "@" + displayContent.telegram;
-        display.getTextBounds(telegramHandle.c_str(), 0, 0, &tbx, &tby, &tbw, &tbh);
-        x = DISPLAY_WIDTH - tbw - 10;  // 10 Pixel Abstand vom rechten Rand
-        display.setCursor(x, TELEGRAM_Y_POS);
-        display.print(telegramHandle);
+        int16_t telegramWidth = u8g2Fonts.getUTF8Width(telegramHandle.c_str());
+        
+        // Position anpassen: Wenn Bild vorhanden, links positionieren, sonst rechts
+        int x;
+        if (hasImage) {
+            x = 10;  // Links positionieren wenn Bild vorhanden
+        } else {
+            x = DISPLAY_WIDTH - telegramWidth - 10;  // Rechts positionieren wenn kein Bild
+        }
+        
+        u8g2Fonts.setCursor(x, TELEGRAM_Y_POS);
+        u8g2Fonts.print(telegramHandle);
     }
-    
-    // Aktualisierungszeit anzeigen (basierend auf millis)
-    unsigned long uptime = millis() / 1000; // Sekunden seit Start
-    int hours = uptime / 3600;
-    int mins = (uptime % 3600) / 60;
-    int secs = uptime % 60;
-    char timeStr[12];
-    sprintf(timeStr, "%02d:%02d:%02d", hours, mins, secs);
-    display.setCursor(10, TELEGRAM_Y_POS);
-    display.print(timeStr);
     
     // Entferne Akku-Symbol (wird nicht mehr angezeigt)
 }
@@ -277,12 +324,17 @@ bool loadDisplayContent() {
     displayContent.telegram = doc["telegram"] | "";
     displayContent.imagePath = doc["imagePath"] | "";
     displayContent.invertColors = doc["invertColors"] | false;
+    displayContent.nameColorRed = doc["nameColorRed"] | true;  // Standard: Rot
 
     return true;
 }
 
 // Diese Funktion speichert die Display-Inhalte in SPIFFS
 void saveDisplayContent() {
+    saveDisplayContent(true); // Standard: Mit Update
+}
+
+void saveDisplayContent(bool sendUpdate) {
     Serial.println("saveDisplayContent() aufgerufen");
     
     StaticJsonDocument<512> doc;
@@ -291,6 +343,7 @@ void saveDisplayContent() {
     doc["telegram"] = displayContent.telegram;
     doc["imagePath"] = displayContent.imagePath;
     doc["invertColors"] = displayContent.invertColors;
+    doc["nameColorRed"] = displayContent.nameColorRed;
     
     Serial.println("Speichere Display-Inhalte in SPIFFS: Name=" + displayContent.name + 
                   ", Beschreibung=" + displayContent.description + 
@@ -311,8 +364,8 @@ void saveDisplayContent() {
     
     file.close();
     
-    // Display aktualisieren
-    if (displayQueue != NULL) {
+    // Display aktualisieren nur wenn gewünscht
+    if (sendUpdate && displayQueue != NULL) {
         Serial.println("Sende CMD_UPDATE Kommando an Display-Queue");
         DisplayCommand cmd = CMD_UPDATE;
         if (xQueueSend(displayQueue, &cmd, pdMS_TO_TICKS(100)) == pdPASS) {
@@ -320,6 +373,8 @@ void saveDisplayContent() {
         } else {
             Serial.println("ERROR: CMD_UPDATE Kommando konnte nicht gesendet werden!");
         }
+    } else if (!sendUpdate) {
+        Serial.println("Display-Update übersprungen (sendUpdate=false)");
     } else {
         Serial.println("ERROR: displayQueue ist NULL - kann kein Update senden!");
     }
@@ -586,94 +641,11 @@ void updateDisplayOnButtonPress() {
     
     Serial.println("🔄 Display-Update durch Tastendruck angefordert");
     
-    // Vollständiges Display-Update durchführen
+    // Vollständiges Display-Update durchführen - verwende drawDisplayContent() für Unicode-Support
     display.setFullWindow();
     display.firstPage();
     do {
-        // Hintergrund
-        uint16_t bgColor = displayContent.invertColors ? GxEPD_BLACK : GxEPD_WHITE;
-        uint16_t fgColor = displayContent.invertColors ? GxEPD_WHITE : GxEPD_BLACK;
-        uint16_t accentColor = GxEPD_RED;  // Rot bleibt immer Rot
-        
-        display.fillScreen(bgColor);
-        
-        // Name in Rot mit größerer Schrift, zentriert oben
-        display.setFont(&FreeMonoBold18pt7b);
-        display.setTextColor(accentColor);
-        int16_t tbx, tby; 
-        uint16_t tbw, tbh;
-        display.getTextBounds(displayContent.name, 0, 0, &tbx, &tby, &tbw, &tbh);
-        uint16_t x = (DISPLAY_WIDTH - tbw) / 2;
-        display.setCursor(x, 30);
-        display.print(displayContent.name);
-        
-        // Trennlinie unter dem Namen (volle Breite)
-        display.drawLine(0, LINE_Y_POS, DISPLAY_WIDTH, LINE_Y_POS, fgColor);
-        
-        // Bildanzeige
-        bool hasImage = false;
-        if (displayContent.imagePath.length() > 0 && SPIFFS.exists(displayContent.imagePath)) {
-            File imageFile = SPIFFS.open(displayContent.imagePath, "r");
-            if (imageFile) {
-                hasImage = true;
-                display.drawRect(IMAGE_X_POS, IMAGE_Y_POS, IMAGE_SIZE, IMAGE_SIZE, fgColor);
-                display.drawLine(IMAGE_X_POS, IMAGE_Y_POS, 
-                             IMAGE_X_POS + IMAGE_SIZE, IMAGE_Y_POS + IMAGE_SIZE, fgColor);
-                display.drawLine(IMAGE_X_POS + IMAGE_SIZE, IMAGE_Y_POS, 
-                             IMAGE_X_POS, IMAGE_Y_POS + IMAGE_SIZE, fgColor);
-                imageFile.close();
-            }
-        }
-        
-        // Beschreibung
-        display.setFont(&FreeSans9pt7b);
-        display.setTextColor(fgColor);
-        String desc = displayContent.description;
-        int currentY = DESC_Y_POS;
-        int lineHeight = 20;
-        int maxWidth = hasImage ? (IMAGE_X_POS - 20) : (DISPLAY_WIDTH - 20);
-        String currentLine = "";
-        
-        for (int i = 0; i < desc.length(); i++) {
-            currentLine += desc[i];
-            display.getTextBounds(currentLine.c_str(), 0, 0, &tbx, &tby, &tbw, &tbh);
-            
-            if (tbw > maxWidth || desc[i] == '\n') {
-                display.setCursor(10, currentY);
-                display.print(currentLine);
-                currentY += lineHeight;
-                currentLine = "";
-                
-                if (currentY >= TELEGRAM_Y_POS - lineHeight) {
-                    break;
-                }
-            }
-        }
-        
-        if (currentLine.length() > 0 && currentY < TELEGRAM_Y_POS - lineHeight) {
-            display.setCursor(10, currentY);
-            display.print(currentLine);
-        }
-        
-        // Telegram Handle rechts unten
-        if (displayContent.telegram.length() > 0) {
-            String telegramHandle = "@" + displayContent.telegram;
-            display.getTextBounds(telegramHandle.c_str(), 0, 0, &tbx, &tby, &tbw, &tbh);
-            x = DISPLAY_WIDTH - tbw - 10;  // 10 Pixel Abstand vom rechten Rand
-            display.setCursor(x, TELEGRAM_Y_POS);
-            display.print(telegramHandle);
-        }
-        
-        // Aktualisierungszeit anzeigen (basierend auf millis)
-        unsigned long uptime = millis() / 1000; // Sekunden seit Start
-        int hours = uptime / 3600;
-        int mins = (uptime % 3600) / 60;
-        int secs = uptime % 60;
-        char timeStr[12];
-        sprintf(timeStr, "%02d:%02d:%02d", hours, mins, secs);
-        display.setCursor(10, TELEGRAM_Y_POS);
-        display.print(timeStr);
-        
+        drawDisplayContent();  // Verwende die Unicode-fähige Funktion
     } while (display.nextPage());
     
     Serial.println("✅ Display-Update durch Tastendruck abgeschlossen");
@@ -757,4 +729,361 @@ void partialBWUpdate(int16_t x, int16_t y, int16_t w, int16_t h, bool forceUpdat
     // nicht GxEPD_RED, da dies zu Anzeigefehlern führen kann.
     
     Serial.println("➡️ Partielles BW-Update gestartet");
+}
+
+// Funktion zur Dekodierung und Anzeige von 1-Bit Bitmaps
+bool drawBitmapFromFile(const String& filePath, int16_t x, int16_t y, uint16_t fgColor, uint16_t bgColor) {
+    Serial.printf("🖼️ Versuche Bild zu laden: %s\n", filePath.c_str());
+    
+    // Debug: Liste alle SPIFFS-Dateien auf
+    Serial.println("📂 SPIFFS-Dateien:");
+    File root = SPIFFS.open("/");
+    File file = root.openNextFile();
+    while(file) {
+        Serial.printf("   - %s (%d Bytes)\n", file.name(), file.size());
+        file = root.openNextFile();
+    }
+    root.close();
+    
+    // Prüfe ob Datei existiert
+    if (!SPIFFS.exists(filePath)) {
+        Serial.printf("❌ Datei existiert nicht: %s\n", filePath.c_str());
+        return false;
+    }
+    
+    File imageFile = SPIFFS.open(filePath, "r");
+    if (!imageFile) {
+        Serial.printf("❌ Kann Bilddatei nicht öffnen: %s\n", filePath.c_str());
+        return false;
+    }
+    
+    size_t fileSize = imageFile.size();
+    Serial.printf("📁 Dateigröße: %d Bytes\n", fileSize);
+    
+    // Prüfe Dateierweiterung
+    bool isJpg = filePath.endsWith(".jpg") || filePath.endsWith(".jpeg") || filePath.endsWith(".JPG") || filePath.endsWith(".JPEG");
+    
+    if (isJpg) {
+        Serial.println("🖼️ JPG-Datei erkannt - zeige einfaches Platzhalter-Symbol");
+        
+        imageFile.close();
+        
+        // Für JPG-Dateien: Zeige ein einfaches Bild-Symbol
+        // Da JPG-Dekodierung sehr komplex ist, zeigen wir ein stilisiertes Bild-Symbol
+        
+        // Hintergrund füllen
+        display.fillRect(x, y, IMAGE_SIZE, IMAGE_SIZE, bgColor);
+        
+        // Einfaches Bild-Symbol zeichnen
+        int centerX = x + IMAGE_SIZE / 2;
+        int centerY = y + IMAGE_SIZE / 2;
+        
+        // Rahmen
+        display.drawRect(x + 8, y + 8, IMAGE_SIZE - 16, IMAGE_SIZE - 16, fgColor);
+        display.drawRect(x + 9, y + 9, IMAGE_SIZE - 18, IMAGE_SIZE - 18, fgColor);
+        
+        // Berge/Landschaft
+        display.drawLine(x + 12, y + 45, x + 25, y + 30, fgColor);
+        display.drawLine(x + 25, y + 30, x + 35, y + 40, fgColor);
+        display.drawLine(x + 35, y + 40, x + 45, y + 25, fgColor);
+        display.drawLine(x + 45, y + 25, x + 52, y + 35, fgColor);
+        
+        // Sonne
+        display.fillCircle(x + 45, y + 20, 4, fgColor);
+        
+        // Text "JPG"
+        display.setCursor(x + 20, y + 55);
+        display.setTextSize(1);
+        display.print("JPG");
+        
+        Serial.println("✅ JPG-Platzhalter erfolgreich angezeigt");
+        return true;
+    }
+    
+    // Erste 54 Bytes lesen um BMP-Header zu prüfen
+    uint8_t header[54];
+    size_t headerRead = imageFile.read(header, 54);
+    
+    if (headerRead < 54) {
+        Serial.printf("❌ Kann nur %d von 54 Header-Bytes lesen\n", headerRead);
+        imageFile.close();
+        return false;
+    }
+    
+    // Debug: Erste Bytes ausgeben
+    Serial.printf("🔍 Erste 4 Bytes: 0x%02X 0x%02X 0x%02X 0x%02X\n", 
+                  header[0], header[1], header[2], header[3]);
+    
+    // BMP-Signatur prüfen
+    if (header[0] != 'B' || header[1] != 'M') {
+        Serial.printf("❌ Keine BMP-Signatur gefunden (0x%02X 0x%02X statt 'BM')\n", header[0], header[1]);
+        
+        // Versuche als Raw-Bitmap zu behandeln
+        Serial.println("🔄 Versuche als Raw 1-Bit Bitmap...");
+        imageFile.seek(0); // Zurück zum Anfang
+        
+        // Raw 1-Bit Bitmap: 64x64 = 512 Bytes
+        if (fileSize >= 512) {
+            uint8_t buffer[8]; // 8 Bytes = 64 Pixel pro Zeile
+            
+            for (int row = 0; row < 64; row++) {
+                size_t bytesRead = imageFile.read(buffer, 8);
+                if (bytesRead != 8) {
+                    Serial.printf("❌ Zeile %d: Nur %d von 8 Bytes gelesen\n", row, bytesRead);
+                    break;
+                }
+                
+                for (int col = 0; col < 64; col++) {
+                    int byteIndex = col / 8;
+                    int bitIndex = 7 - (col % 8); // MSB first
+                    bool pixelOn = (buffer[byteIndex] >> bitIndex) & 1;
+                    
+                    if (pixelOn) {
+                        display.drawPixel(x + col, y + row, fgColor);
+                    } else {
+                        display.drawPixel(x + col, y + row, bgColor);
+                    }
+                }
+            }
+            
+            imageFile.close();
+            Serial.println("✅ Raw Bitmap erfolgreich geladen");
+            return true;
+        } else {
+            Serial.printf("❌ Datei zu klein für Raw Bitmap (%d < 512 Bytes)\n", fileSize);
+            imageFile.close();
+            return false;
+        }
+    }
+    
+    // BMP-Header analysieren
+    uint32_t dataOffset = *(uint32_t*)&header[10];
+    uint32_t dibHeaderSize = *(uint32_t*)&header[14];
+    uint32_t width = *(uint32_t*)&header[18];
+    uint32_t height = *(uint32_t*)&header[22];
+    uint16_t bitsPerPixel = *(uint16_t*)&header[28];
+    uint32_t compression = *(uint32_t*)&header[30];
+    
+    Serial.printf("📊 BMP-Info:\n");
+    Serial.printf("   - Daten-Offset: %d\n", dataOffset);
+    Serial.printf("   - DIB-Header-Größe: %d\n", dibHeaderSize);
+    Serial.printf("   - Größe: %dx%d\n", width, height);
+    Serial.printf("   - Bits pro Pixel: %d\n", bitsPerPixel);
+    Serial.printf("   - Kompression: %d\n", compression);
+    
+    // Validierung
+    if (compression != 0) {
+        Serial.printf("❌ Komprimierte BMPs werden nicht unterstützt (Kompression: %d)\n", compression);
+        imageFile.close();
+        return false;
+    }
+    
+    if (bitsPerPixel != 1 && bitsPerPixel != 8 && bitsPerPixel != 24 && bitsPerPixel != 32) {
+        Serial.printf("❌ Nicht unterstützte Farbtiefe: %d bpp\n", bitsPerPixel);
+        imageFile.close();
+        return false;
+    }
+    
+    // Zu Datenbereich springen
+    imageFile.seek(dataOffset);
+    Serial.printf("🔄 Springe zu Daten-Offset: %d\n", dataOffset);
+    
+    if (bitsPerPixel == 1) {
+        // 1-Bit BMP (Monochrom)
+        int bytesPerRow = (width + 7) / 8;
+        int paddedBytesPerRow = (bytesPerRow + 3) & ~3; // 4-Byte-Ausrichtung
+        
+        Serial.printf("📏 Bytes pro Zeile: %d, mit Padding: %d\n", bytesPerRow, paddedBytesPerRow);
+        
+        uint8_t* rowBuffer = (uint8_t*)malloc(paddedBytesPerRow);
+        if (!rowBuffer) {
+            Serial.println("❌ Speicher-Allokation fehlgeschlagen");
+            imageFile.close();
+            return false;
+        }
+        
+        // BMP ist von unten nach oben gespeichert
+        for (int row = height - 1; row >= 0; row--) {
+            size_t bytesRead = imageFile.read(rowBuffer, paddedBytesPerRow);
+            if (bytesRead != paddedBytesPerRow) {
+                Serial.printf("❌ Zeile %d: Nur %d von %d Bytes gelesen\n", row, bytesRead, paddedBytesPerRow);
+                break;
+            }
+            
+            // Nur die ersten 64 Pixel und 64 Zeilen anzeigen
+            if (row < IMAGE_SIZE) {
+                for (int col = 0; col < width && col < IMAGE_SIZE; col++) {
+                    int byteIndex = col / 8;
+                    int bitIndex = 7 - (col % 8); // MSB first
+                    bool pixelOn = (rowBuffer[byteIndex] >> bitIndex) & 1;
+                    
+                    // BMP 1-Bit: 0 = schwarz, 1 = weiß
+                    // Für E-Paper: schwarz = fgColor, weiß = bgColor
+                    if (!pixelOn) { // 0 = schwarz
+                        display.drawPixel(x + col, y + (IMAGE_SIZE - 1 - row), fgColor);
+                    } else { // 1 = weiß
+                        display.drawPixel(x + col, y + (IMAGE_SIZE - 1 - row), bgColor);
+                    }
+                }
+            }
+        }
+        
+        free(rowBuffer);
+        imageFile.close();
+        Serial.println("✅ 1-Bit BMP erfolgreich geladen");
+        return true;
+    }
+    else if (bitsPerPixel == 8) {
+        // 8-Bit BMP (Graustufen oder indiziert)
+        Serial.println("🔄 Lade 8-Bit BMP als Graustufen...");
+        
+        // Palette überspringen (256 * 4 Bytes)
+        imageFile.seek(dataOffset);
+        
+        int bytesPerRow = width;
+        int paddedBytesPerRow = (bytesPerRow + 3) & ~3;
+        
+        uint8_t* rowBuffer = (uint8_t*)malloc(paddedBytesPerRow);
+        if (!rowBuffer) {
+            Serial.println("❌ Speicher-Allokation fehlgeschlagen");
+            imageFile.close();
+            return false;
+        }
+        
+        for (int row = height - 1; row >= 0; row--) {
+            size_t bytesRead = imageFile.read(rowBuffer, paddedBytesPerRow);
+            if (bytesRead != paddedBytesPerRow) break;
+            
+            if (row < IMAGE_SIZE) {
+                for (int col = 0; col < width && col < IMAGE_SIZE; col++) {
+                    uint8_t grayValue = rowBuffer[col];
+                    // Schwellwert bei 128: < 128 = schwarz, >= 128 = weiß
+                    if (grayValue < 128) {
+                        display.drawPixel(x + col, y + (IMAGE_SIZE - 1 - row), fgColor);
+                    } else {
+                        display.drawPixel(x + col, y + (IMAGE_SIZE - 1 - row), bgColor);
+                    }
+                }
+            }
+        }
+        
+        free(rowBuffer);
+        imageFile.close();
+        Serial.println("✅ 8-Bit BMP erfolgreich geladen");
+        return true;
+    }
+    else if (bitsPerPixel == 24) {
+        // 24-Bit BMP (RGB)
+        Serial.println("🔄 Lade 24-Bit BMP als RGB...");
+        
+        int bytesPerRow = width * 3;
+        int paddedBytesPerRow = (bytesPerRow + 3) & ~3;
+        
+        uint8_t* rowBuffer = (uint8_t*)malloc(paddedBytesPerRow);
+        if (!rowBuffer) {
+            Serial.println("❌ Speicher-Allokation fehlgeschlagen");
+            imageFile.close();
+            return false;
+        }
+        
+        for (int row = height - 1; row >= 0; row--) {
+            size_t bytesRead = imageFile.read(rowBuffer, paddedBytesPerRow);
+            if (bytesRead != paddedBytesPerRow) break;
+            
+            if (row < IMAGE_SIZE) {
+                for (int col = 0; col < width && col < IMAGE_SIZE; col++) {
+                    int pixelIndex = col * 3;
+                    uint8_t blue = rowBuffer[pixelIndex];
+                    uint8_t green = rowBuffer[pixelIndex + 1];
+                    uint8_t red = rowBuffer[pixelIndex + 2];
+                    
+                    // RGB zu Graustufen: 0.299*R + 0.587*G + 0.114*B
+                    uint8_t gray = (uint8_t)(0.299f * red + 0.587f * green + 0.114f * blue);
+                    
+                    // VEREINFACHTER ANSATZ: Einfacher Schwellwert ohne Dithering
+                    // Das verhindert die Streifen-Artefakte
+                    bool isBlack = gray < 128;
+                    
+                    // KORRIGIERT: Bildorientierung - BMP ist von unten nach oben, aber wir wollen es richtig herum
+                    int displayRow = row; // Verwende row direkt, nicht invertiert
+                    if (isBlack) {
+                        display.drawPixel(x + col, y + displayRow, fgColor);
+                    } else {
+                        display.drawPixel(x + col, y + displayRow, bgColor);
+                    }
+                }
+            }
+        }
+        
+        free(rowBuffer);
+        imageFile.close();
+        Serial.println("✅ 24-Bit BMP erfolgreich geladen");
+        return true;
+    }
+    else if (bitsPerPixel == 32) {
+        // 32-Bit BMP (RGBA oder RGBX)
+        Serial.println("🔄 Lade 32-Bit BMP als RGBA...");
+        
+        int bytesPerRow = width * 4;
+        int paddedBytesPerRow = (bytesPerRow + 3) & ~3;
+        
+        Serial.printf("📏 32-Bit: Bytes pro Zeile: %d, mit Padding: %d\n", bytesPerRow, paddedBytesPerRow);
+        
+        uint8_t* rowBuffer = (uint8_t*)malloc(paddedBytesPerRow);
+        if (!rowBuffer) {
+            Serial.println("❌ Speicher-Allokation fehlgeschlagen");
+            imageFile.close();
+            return false;
+        }
+        
+        int processedRows = 0;
+        for (int row = height - 1; row >= 0; row--) {
+            size_t bytesRead = imageFile.read(rowBuffer, paddedBytesPerRow);
+            if (bytesRead != paddedBytesPerRow) {
+                Serial.printf("⚠️ Zeile %d: Nur %d von %d Bytes gelesen\n", row, bytesRead, paddedBytesPerRow);
+                break;
+            }
+            
+            if (row < IMAGE_SIZE) {
+                processedRows++;
+                for (int col = 0; col < width && col < IMAGE_SIZE; col++) {
+                    int pixelIndex = col * 4;
+                    uint8_t blue = rowBuffer[pixelIndex];
+                    uint8_t green = rowBuffer[pixelIndex + 1];
+                    uint8_t red = rowBuffer[pixelIndex + 2];
+                    uint8_t alpha = rowBuffer[pixelIndex + 3];
+                    
+                    // Alpha-Blending mit weißem Hintergrund
+                    float alphaF = alpha / 255.0f;
+                    uint8_t blendedRed = (uint8_t)(red * alphaF + 255 * (1 - alphaF));
+                    uint8_t blendedGreen = (uint8_t)(green * alphaF + 255 * (1 - alphaF));
+                    uint8_t blendedBlue = (uint8_t)(blue * alphaF + 255 * (1 - alphaF));
+                    
+                    // RGB zu Graustufen mit Alpha-Berücksichtigung
+                    uint8_t gray = (uint8_t)(0.299f * blendedRed + 0.587f * blendedGreen + 0.114f * blendedBlue);
+                    
+                    // VEREINFACHTER ANSATZ: Einfacher Schwellwert ohne Dithering
+                    // Das verhindert die Streifen-Artefakte
+                    bool isBlack = gray < 128;
+                    
+                    // KORRIGIERT: Bildorientierung - BMP ist von unten nach oben, aber wir wollen es richtig herum
+                    int displayRow = row; // Verwende row direkt, nicht invertiert
+                    if (isBlack) {
+                        display.drawPixel(x + col, y + displayRow, fgColor);
+                    } else {
+                        display.drawPixel(x + col, y + displayRow, bgColor);
+                    }
+                }
+            }
+        }
+        
+        free(rowBuffer);
+        imageFile.close();
+        Serial.printf("✅ 32-Bit BMP mit Alpha-Blending erfolgreich geladen (%d Zeilen verarbeitet)\n", processedRows);
+        return true;
+    }
+    
+    imageFile.close();
+    Serial.printf("❌ Unbekanntes BMP-Format: %d bpp\n", bitsPerPixel);
+    return false;
 }

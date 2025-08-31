@@ -5,18 +5,16 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <SPIFFS.h>
+#include <ESPmDNS.h>  // mDNS für badge.local
+#include <HTTPClient.h>  // Für OTA-Server-Status-Check
 #include "Settings.h"
 #include "Config.h"
 #include "Display.h"
 #include "BQ25895CONFIG.h"  // Für Akku-Funktionen
 #include <Arduino.h>
+#include "Globals.h"
 
 // Externe Variablen für LED
-extern uint8_t gCurrentMode;
-extern uint8_t BRIGHTNESS;
-extern uint8_t NOISE_LEVEL;
-extern uint16_t animationSpeed;
-extern uint16_t micFrequency;
 extern String apName;
 extern String apPassword;
 extern Settings settings;
@@ -85,12 +83,14 @@ const char index_html[] PROGMEM = R"rawliteral(
             color:rgb(0, 191, 255);
         }
         select, input[type="range"] {
-            width: 100%;
-            padding: 8px;
+            width: calc(100% - 16px);
+            padding: 12px;
             border-radius: 5px;
             background: #404040;
             color: white;
             border: 1px solid rgb(0, 191, 255);
+            margin-right: 8px;
+            font-size: 16px;
         }
         input[type="range"] {
             -webkit-appearance: none;
@@ -99,6 +99,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             outline: none;
             opacity: 0.7;
             transition: opacity .2s;
+            padding: 0;
         }
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
@@ -251,16 +252,60 @@ const char index_html[] PROGMEM = R"rawliteral(
         .tab-button {
             background: #333;
             border: 1px solid #444;
-            color: #ccc;
-            border-radius: 5px 5px 0 0;
-            padding: 8px 15px;
+            color: #fff;
+            padding: 10px 20px;
             cursor: pointer;
+            border-radius: 5px 5px 0 0;
             margin-right: 5px;
         }
         .tab-button.active {
-            background: #111;
-            color: #0f0;
-            border-bottom: none;
+            background: #555;
+            border-bottom: 1px solid #555;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .color-grid {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 8px;
+            margin-bottom: 10px;
+            max-width: 100%;
+        }
+        .color-box {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            cursor: pointer;
+            border: 3px solid transparent;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        .color-box:hover {
+            border-color: #fff;
+            transform: scale(1.1);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+        }
+        .color-box.selected {
+            border-color: rgb(0, 191, 255);
+            box-shadow: 0 0 10px rgba(0, 191, 255, 0.5);
+        }
+        @media (max-width: 600px) {
+            .color-grid {
+                grid-template-columns: repeat(6, 1fr);
+                gap: 6px;
+            }
+            .color-box {
+                width: 35px;
+                height: 35px;
+            }
+            select {
+                font-size: 18px;
+                padding: 14px;
+            }
         }
     </style>
 </head>
@@ -276,37 +321,95 @@ const char index_html[] PROGMEM = R"rawliteral(
 
         <div class="card">
             <div class="control-group">
-                <label for="mode">Animation Mode</label>
+                <label for="mode">LED-Modus</label>
                 <select id="mode" onchange="updateValue('mode', this.value)">
-                    <option value="1">Color Wipe</option>
-                    <option value="2">Twinkle</option>
-                    <option value="3">Fire</option>
-                    <option value="4">Pulse</option>
-                    <option value="5">Wave</option>
-                    <option value="6">Sparkle</option>
-                    <option value="7">Gradient</option>
-                    <option value="8">Dots</option>
-                    <option value="9">Comet</option>
-                    <option value="10">Bounce</option>
-                    <option value="11">Music Reactive</option>
+                    <option value="0">Einfarbig</option>
+                    <option value="1">Regenbogen</option>
+                    <option value="2">Regenbogen-Welle</option>
+                    <option value="3">Farbwisch</option>
+                    <option value="4">Theater-Verfolgung</option>
+                    <option value="5">Funkeln</option>
+                    <option value="6">Feuer</option>
+                    <option value="7">Pulsieren</option>
+                    <option value="8">Welle</option>
+                    <option value="9">Glitzern</option>
+                    <option value="10">Gradient</option>
+                    <option value="11">Wandernde Punkte</option>
+                    <option value="12">Komet</option>
+                    <option value="13">Springender Ball</option>
+                    <option value="14">Feuerwerk</option>
+                    <option value="15">Blitz</option>
+                    <option value="16">Konfetti</option>
+                    <option value="17">Atmung</option>
+                    <option value="18">Regen</option>
+                    <option value="19">Matrix</option>
+                    <option value="20">Umlaufbahn</option>
+                    <option value="21">Spirale</option>
+                    <option value="22">Meteorschauer</option>
+                    <option value="23">Farbrotation</option>
+                    <option value="24">Musik-reaktiv</option>
                 </select>
+            </div>
+            
+            <div class="control-group">
+                <label>Hauptfarbe</label>
+                <div class="color-grid">
+                    <div class="color-box" style="background-color: hsl(0, 100%, 50%)" onclick="setColor('primary', 0)" title="Rot"></div>
+                    <div class="color-box" style="background-color: hsl(30, 100%, 50%)" onclick="setColor('primary', 21)" title="Orange"></div>
+                    <div class="color-box" style="background-color: hsl(60, 100%, 50%)" onclick="setColor('primary', 43)" title="Gelb"></div>
+                    <div class="color-box" style="background-color: hsl(90, 100%, 50%)" onclick="setColor('primary', 64)" title="Gelbgrün"></div>
+                    <div class="color-box" style="background-color: hsl(120, 100%, 50%)" onclick="setColor('primary', 85)" title="Grün"></div>
+                    <div class="color-box" style="background-color: hsl(150, 100%, 50%)" onclick="setColor('primary', 107)" title="Grüncyan"></div>
+                    <div class="color-box" style="background-color: hsl(180, 100%, 50%)" onclick="setColor('primary', 128)" title="Cyan"></div>
+                    <div class="color-box" style="background-color: hsl(210, 100%, 50%)" onclick="setColor('primary', 149)" title="Blau"></div>
+                    <div class="color-box" style="background-color: hsl(240, 100%, 50%)" onclick="setColor('primary', 171)" title="Blauviolett"></div>
+                    <div class="color-box" style="background-color: hsl(270, 100%, 50%)" onclick="setColor('primary', 192)" title="Violett"></div>
+                    <div class="color-box" style="background-color: hsl(300, 100%, 50%)" onclick="setColor('primary', 213)" title="Magenta"></div>
+                    <div class="color-box" style="background-color: hsl(330, 100%, 50%)" onclick="setColor('primary', 235)" title="Rosa"></div>
+                    <div class="color-box" style="background-color: hsl(15, 100%, 50%)" onclick="setColor('primary', 11)" title="Rotorange"></div>
+                    <div class="color-box" style="background-color: hsl(45, 100%, 50%)" onclick="setColor('primary', 32)" title="Goldgelb"></div>
+                    <div class="color-box" style="background-color: hsl(75, 100%, 50%)" onclick="setColor('primary', 53)" title="Hellgrün"></div>
+                    <div class="color-box" style="background-color: hsl(195, 100%, 50%)" onclick="setColor('primary', 139)" title="Himmelblau"></div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label>Akzentfarbe</label>
+                <div class="color-grid">
+                    <div class="color-box" style="background-color: hsl(0, 100%, 50%)" onclick="setColor('secondary', 0)" title="Rot"></div>
+                    <div class="color-box" style="background-color: hsl(30, 100%, 50%)" onclick="setColor('secondary', 21)" title="Orange"></div>
+                    <div class="color-box" style="background-color: hsl(60, 100%, 50%)" onclick="setColor('secondary', 43)" title="Gelb"></div>
+                    <div class="color-box" style="background-color: hsl(90, 100%, 50%)" onclick="setColor('secondary', 64)" title="Gelbgrün"></div>
+                    <div class="color-box" style="background-color: hsl(120, 100%, 50%)" onclick="setColor('secondary', 85)" title="Grün"></div>
+                    <div class="color-box" style="background-color: hsl(150, 100%, 50%)" onclick="setColor('secondary', 107)" title="Grüncyan"></div>
+                    <div class="color-box" style="background-color: hsl(180, 100%, 50%)" onclick="setColor('secondary', 128)" title="Cyan"></div>
+                    <div class="color-box" style="background-color: hsl(210, 100%, 50%)" onclick="setColor('secondary', 149)" title="Blau"></div>
+                    <div class="color-box" style="background-color: hsl(240, 100%, 50%)" onclick="setColor('secondary', 171)" title="Blauviolett"></div>
+                    <div class="color-box" style="background-color: hsl(270, 100%, 50%)" onclick="setColor('secondary', 192)" title="Violett"></div>
+                    <div class="color-box" style="background-color: hsl(300, 100%, 50%)" onclick="setColor('secondary', 213)" title="Magenta"></div>
+                    <div class="color-box" style="background-color: hsl(330, 100%, 50%)" onclick="setColor('secondary', 235)" title="Rosa"></div>
+                    <div class="color-box" style="background-color: hsl(15, 100%, 50%)" onclick="setColor('secondary', 11)" title="Rotorange"></div>
+                    <div class="color-box" style="background-color: hsl(45, 100%, 50%)" onclick="setColor('secondary', 32)" title="Goldgelb"></div>
+                    <div class="color-box" style="background-color: hsl(75, 100%, 50%)" onclick="setColor('secondary', 53)" title="Hellgrün"></div>
+                    <div class="color-box" style="background-color: hsl(195, 100%, 50%)" onclick="setColor('secondary', 139)" title="Himmelblau"></div>
+                </div>
             </div>
         </div>
 
         <div class="card">
             <div class="control-group">
                 <label for="brightness">Brightness</label>
-                <input type="range" id="brightness" min="5" max="255" value="5" 
+                <input type="range" id="brightness" min="12" max="255" value="12" 
                        oninput="updateValue('brightness', this.value)">
-                <div class="value-display"><span id="brightnessValue">5</span></div>
+                <div class="value-display"><span id="brightnessValue">12</span></div>
             </div>
         </div>
 
         <div class="card">
             <div class="control-group">
                 <label for="speed">Animation Speed</label>
-                <input type="range" id="speed" min="1" max="50" value="20" 
-                       oninput="updateValue('speed', this.value)">
+                <input type="range" id="speed" min="1" max="50" value="30" 
+                       oninput="updateSpeedValue(this.value)">
                 <div class="value-display"><span id="speedValue">20</span>ms</div>
             </div>
         </div>
@@ -359,10 +462,6 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <div class="label">Leistung</div>
                 </div>
                 <div class="battery-stat">
-                    <div class="value" id="batteryTemperature">--</div>
-                    <div class="label">Temperatur</div>
-                </div>
-                <div class="battery-stat">
                     <div class="value" id="batterySystemVoltage">--</div>
                     <div class="label">System-Spannung</div>
                 </div>
@@ -371,20 +470,12 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <div class="label">USB-Spannung</div>
                 </div>
                 <div class="battery-stat">
-                    <div class="value" id="batteryInputCurrent">--</div>
-                    <div class="label">Eingangsstrom</div>
-                </div>
-                <div class="battery-stat">
                     <div class="value" id="batteryChargeStatus">--</div>
                     <div class="label">Lade-Status</div>
                 </div>
-                <div class="battery-stat">
-                    <div class="value" id="batteryFaultStatus">--</div>
-                    <div class="label">Fehler-Status</div>
-                </div>
             </div>
             
-            <div style="margin-top: 15px; background: #333; padding: 10px; border-radius: 5px;">
+            <div style="margin-top: 15px; background: #333; padding: 10px; border-radius: 5px; display: none;">
                 <h3 style="margin-top: 0; color: rgb(0, 191, 255);">Register-Werte</h3>
                 <div id="registerValues" style="font-family: monospace; font-size: 12px; color: #ddd;"></div>
             </div>
@@ -392,12 +483,10 @@ const char index_html[] PROGMEM = R"rawliteral(
             <div class="control-group">
                 <label for="chargeCurrent">Ladestrom</label>
                 <select id="chargeCurrent" onchange="setChargeCurrent(this.value)">
-                    <option value="500">0.5A</option>
-                    <option value="1000">1.0A</option>
-                    <option value="1500" selected>1.5A</option>
-                    <option value="2000">2.0A</option>
-                    <option value="3000">3.0A</option>
-                    <option value="4000">4.0A</option>
+                    <option value="500">0.5A (500mA)</option>
+                    <option value="1000">1.0A (1000mA)</option>
+                    <option value="1500" selected>1.5A (1500mA)</option>
+                    <option value="2000">2.0A (2000mA)</option>
                 </select>
             </div>
             
@@ -417,6 +506,11 @@ const char index_html[] PROGMEM = R"rawliteral(
             
             <div id="esp-logs" class="log-container"></div>
             <div id="bq-logs" class="log-container" style="display: none;"></div>
+        </div>
+        
+        <!-- Reboot Button -->
+        <div style="text-align: center; margin-top: 20px;">
+            <button onclick="rebootESP()" style="background: #ff6666; color: white; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-size: 12px;">ESP32 Neustart</button>
         </div>
     </div>
 
@@ -440,6 +534,55 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (displayElement) {
                 displayElement.textContent = value;
             }
+        }
+
+        // Spezielle Funktion für invertierte Geschwindigkeit
+        function updateSpeedValue(sliderValue) {
+            // Invertiere den Wert: Slider links (1) = langsam (50ms), Slider rechts (50) = schnell (1ms)
+            const invertedValue = 51 - parseInt(sliderValue);
+            
+            // Sende den invertierten Wert an den Server
+            const xhr = new XMLHttpRequest();
+            xhr.open("GET", `/settings?param=speed&value=${invertedValue}`, true);
+            xhr.send();
+            
+            // Zeige den invertierten Wert in der Anzeige
+            const displayElement = document.getElementById('speedValue');
+            if (displayElement) {
+                displayElement.textContent = invertedValue;
+            }
+        }
+
+        // Neue Farbauswahl-Funktion
+        function setColor(type, hueValue) {
+            // Alle Boxen des entsprechenden Typs zurücksetzen (vereinfachter Selektor)
+            let colorBoxes;
+            if (type === 'primary') {
+                // Primärfarbe ist die erste Farbgruppe (2. control-group)
+                colorBoxes = document.querySelectorAll('.control-group:nth-child(2) .color-box');
+            } else {
+                // Sekundärfarbe ist die zweite Farbgruppe (3. control-group)
+                colorBoxes = document.querySelectorAll('.control-group:nth-child(3) .color-box');
+            }
+            
+            colorBoxes.forEach(box => box.classList.remove('selected'));
+            
+            // Geklickte Box markieren
+            event.target.classList.add('selected');
+            
+            // Wert senden
+            const param = type === 'primary' ? 'primaryColor' : 'secondaryColor';
+            const xhr = new XMLHttpRequest();
+            xhr.open("GET", `/settings?param=${param}&value=${hueValue}`, true);
+            xhr.send();
+            
+            // Anzeige aktualisieren - ENTFERNT: Farbwerte werden nicht mehr angezeigt
+            // const displayElement = document.getElementById(param + 'Value');
+            // if (displayElement) {
+            //     displayElement.textContent = hueValue;
+            // }
+            
+            console.log(`${type} Farbe gesetzt auf: ${hueValue}`);
         }
 
         // LED-Steuerung
@@ -467,20 +610,43 @@ const char index_html[] PROGMEM = R"rawliteral(
             });
         }
 
-        // Initial values
-        window.onload = function() {
+        // Initial values - verwende addEventListener statt window.onload
+        document.addEventListener('DOMContentLoaded', function() {
             fetch('/values')
             .then(response => response.json())
             .then(data => {
                 document.getElementById('mode').value = data.mode;
                 document.getElementById('brightness').value = data.brightness;
                 document.getElementById('brightnessValue').textContent = data.brightness;
-                document.getElementById('speed').value = data.speed;
-                document.getElementById('speedValue').textContent = data.speed;
+                
+                // Invertierte Geschwindigkeit: Server-Wert zu Slider-Wert
+                const serverSpeed = data.speed;
+                const sliderSpeed = 51 - serverSpeed; // Invertierung
+                document.getElementById('speed').value = sliderSpeed;
+                document.getElementById('speedValue').textContent = serverSpeed;
+                
                 document.getElementById('sensitivity').value = data.sensitivity;
                 document.getElementById('sensitivityValue').textContent = data.sensitivity;
                 document.getElementById('frequency').value = data.frequency;
                 document.getElementById('frequencyValue').textContent = data.frequency;
+                
+                // Neue Farbwerte laden und Boxen markieren
+                if (data.primaryColor !== undefined) {
+                    // Entsprechende Farbbox markieren
+                    const primaryBoxes = document.querySelectorAll('.control-group:nth-child(2) .color-box');
+                    const primaryIndex = Math.floor(data.primaryColor / 16);
+                    if (primaryBoxes[primaryIndex]) {
+                        primaryBoxes[primaryIndex].classList.add('selected');
+                    }
+                }
+                if (data.secondaryColor !== undefined) {
+                    // Entsprechende Farbbox markieren
+                    const secondaryBoxes = document.querySelectorAll('.control-group:nth-child(3) .color-box');
+                    const secondaryIndex = Math.floor(data.secondaryColor / 16);
+                    if (secondaryBoxes[secondaryIndex]) {
+                        secondaryBoxes[secondaryIndex].classList.add('selected');
+                    }
+                }
                 
                 // LED-Status abrufen und Button aktualisieren
                 if (data.ledsEnabled !== undefined) {
@@ -493,22 +659,43 @@ const char index_html[] PROGMEM = R"rawliteral(
                 }
             });
             
-            // Initiale Akku-Daten abrufen
-            updateBatteryInfo();
+            // Initiale Akku-Daten abrufen - mit Verzögerung um sicherzustellen dass alle Elemente geladen sind
+            setTimeout(function() {
+                updateBatteryInfo();
+                fetchLogs();
+            }, 500);
             
-            // Akku-Daten alle 1 Sekunde aktualisieren
-            setInterval(updateBatteryInfo, 1000);
+            // Akku-Daten alle 5 Sekunden aktualisieren (häufiger für bessere Überwachung)
+            setInterval(updateBatteryInfo, 5000);
             
             // Logs regelmäßig abrufen
             setInterval(fetchLogs, 2000);
-            fetchLogs(); // Initial logs abrufen
-        }
+        });
+        
+        // ZUSÄTZLICHE SICHERUNG: Starte Akku-Updates auch nach 3 Sekunden falls sie noch nicht laufen
+        setTimeout(function() {
+            console.log('🔄 Starte Backup-Timer für Akku-Updates');
+            updateBatteryInfo();
+            fetchLogs();
+            
+            // Starte auch die Intervalle nochmal zur Sicherheit
+            setInterval(updateBatteryInfo, 5000);
+            setInterval(fetchLogs, 2000);
+        }, 3000);
         
         // Akku-Informationen aktualisieren
         function updateBatteryInfo() {
+            console.log('🔍 updateBatteryInfo() gestartet');
             fetch('/battery-status')
-            .then(response => response.json())
+            .then(response => {
+                console.log('🔍 Response erhalten:', response.status, response.statusText);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
             .then(data => {
+                console.log('🔍 Batterie-Daten erhalten:', data);
                 // Spannungen
                 document.getElementById('batteryVoltage').textContent = data.vbat.toFixed(2) + 'V';
                 document.getElementById('batterySystemVoltage').textContent = data.vsys.toFixed(2) + 'V';
@@ -542,18 +729,15 @@ const char index_html[] PROGMEM = R"rawliteral(
                 
                 // Ströme
                 document.getElementById('batteryCurrent').textContent = data.ichg.toFixed(0) + ' mA';
-                document.getElementById('batteryInputCurrent').textContent = data.iin.toFixed(0) + ' mA';
                 
                 // Leistung in Watt anzeigen
                 document.getElementById('batteryPower').textContent = data.power.toFixed(3) + ' W';
                 
-                // Temperatur und Status anzeigen
-                document.getElementById('batteryTemperature').textContent = data.temperature;
+                // Status anzeigen
                 document.getElementById('batteryChargeStatus').textContent = data.chargeStatus;
-                document.getElementById('batteryFaultStatus').textContent = 
-                    data.faultStatus.length > 0 ? data.faultStatus : "Keine Fehler";
                 
-                // Register-Werte anzeigen
+                // Register-Werte anzeigen - ENTFERNT
+                /*
                 if (data.registers) {
                     let regHtml = '';
                     for (const [reg, value] of Object.entries(data.registers)) {
@@ -561,9 +745,13 @@ const char index_html[] PROGMEM = R"rawliteral(
                     }
                     document.getElementById('registerValues').innerHTML = regHtml;
                 }
+                */
             })
             .catch(error => {
-                console.error('Fehler beim Abrufen der Akku-Daten:', error);
+                console.error('❌ Fehler beim Abrufen der Akku-Daten:', error);
+                // Fallback-Anzeige bei Fehlern
+                document.getElementById('batteryVoltage').textContent = 'Fehler';
+                document.getElementById('batteryPercentage').textContent = '?%';
             });
         }
         
@@ -652,9 +840,17 @@ const char index_html[] PROGMEM = R"rawliteral(
         
         // Logs vom Server abrufen
         function fetchLogs() {
+            console.log('🔍 fetchLogs() gestartet');
             fetch('/get-logs')
-            .then(response => response.json())
+            .then(response => {
+                console.log('🔍 Logs Response:', response.status, response.statusText);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
             .then(data => {
+                console.log('🔍 Log-Daten erhalten:', data);
                 if (data.esp && data.esp.length > 0) {
                     espLogs = data.esp;
                     updateLogDisplay('esp-logs', espLogs);
@@ -666,7 +862,261 @@ const char index_html[] PROGMEM = R"rawliteral(
                 }
             })
             .catch(error => {
-                console.error('Fehler beim Abrufen der Logs:', error);
+                console.error('❌ Fehler beim Abrufen der Logs:', error);
+            });
+        }
+        
+        // ESP32 Neustart-Funktion
+        function rebootESP() {
+            if (confirm('ESP32 wirklich neu starten? Die Verbindung wird kurz unterbrochen.')) {
+                fetch('/reboot')
+                .then(response => response.text())
+                .then(result => {
+                    alert('ESP32 wird neu gestartet. Bitte warten Sie 10-15 Sekunden und laden Sie die Seite neu.');
+                })
+                .catch(error => {
+                    console.error('Fehler beim Neustart:', error);
+                    alert('Neustart wurde gesendet. Bitte warten Sie 10-15 Sekunden und laden Sie die Seite neu.');
+                });
+            }
+        }
+
+        function updateDisplay() {
+            // Daten direkt als einfaches Objekt zusammenstellen
+            const name = document.getElementById('name').value;
+            const description = document.getElementById('description').value;
+            const telegram = document.getElementById('telegram').value;
+            const invertColors = document.getElementById('invertColors').checked;
+            const nameColorRed = document.getElementById('nameColorRed').checked;
+            
+            // Erst das Bild hochladen, falls vorhanden
+            if (imageData) {
+                const formData = new FormData();
+                
+                // Konvertiere Base64 zu Blob
+                const byteCharacters = atob(imageData.split(',')[1]);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], {type: 'image/jpeg'});
+                
+                formData.append('image', blob, 'badge_image.jpg');
+                
+                fetch('/upload-image', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.text())
+                .then(result => {
+                    if(result === 'OK') {
+                        console.log('Bild erfolgreich hochgeladen');
+                        // Nach erfolgreichem Bild-Upload die anderen Daten aktualisieren
+                        updateDisplayData(name, description, telegram, invertColors, nameColorRed);
+                    } else {
+                        alert('Fehler beim Hochladen des Bildes!');
+                    }
+                })
+                .catch(error => {
+                    console.error('Fehler beim Bild-Upload:', error);
+                    alert('Fehler beim Hochladen des Bildes!');
+                });
+            } else {
+                // Kein Bild, direkt die Daten aktualisieren
+                updateDisplayData(name, description, telegram, invertColors, nameColorRed);
+            }
+        }
+        
+        function updateDisplayData(name, description, telegram, invertColors, nameColorRed) {
+            // Verwende ein einfaches GET wie beim simple-update Endpunkt, der funktioniert
+            const url = `/simple-update?name=${encodeURIComponent(name)}&description=${encodeURIComponent(description)}&telegram=${encodeURIComponent(telegram)}&invert=${invertColors ? '1' : '0'}&nameRed=${nameColorRed ? '1' : '0'}`;
+            
+            fetch(url)
+            .then(response => response.text())
+            .then(result => {
+                if(result.includes("Simple Update")) {
+                    alert('Display wird aktualisiert, Bitte warten...');
+                } else {
+                    alert('Fehler beim Aktualisieren!');
+                }
+            });
+        }
+
+        function testDisplay() {
+            if (isLowBattery) {
+                alert('Display-Update wegen niedriger Batterie nicht möglich');
+                return;
+            }
+            
+            fetch('/test-display')
+            .then(response => response.text())
+            .then(result => {
+                if(result === 'OK') {
+                    alert('Display-Test wurde gestartet!');
+                } else {
+                    alert('Fehler beim Display-Test!');
+                }
+            });
+        }
+
+        function clearDisplay() {
+            if (isLowBattery) {
+                alert('Display-Update wegen niedriger Batterie nicht möglich');
+                return;
+            }
+            
+            fetch('/clear-display')
+            .then(response => response.text())
+            .then(result => {
+                if(result === 'OK') {
+                    alert('Display wurde geleert!');
+                    // Formularfelder leeren
+                    document.getElementById('name').value = '';
+                    document.getElementById('description').value = '';
+                    document.getElementById('telegram').value = '';
+                    document.getElementById('invertColors').checked = false;
+                    document.getElementById('nameColorRed').checked = true;  // Standard: Rot
+                    previewImg.style.display = 'none';
+                    noImageText.style.display = 'block';
+                    imageData = null;
+                    imageUpload.value = '';
+                } else {
+                    alert('Fehler beim leeren des Displays!');
+                }
+            });
+        }
+
+        function deleteImage() {
+            if (confirm('Bild wirklich löschen?')) {
+                fetch('/delete-image')
+                .then(response => response.text())
+                .then(result => {
+                    if(result === 'OK') {
+                        alert('Bild wurde erfolgreich gelöscht!');
+                        previewImg.style.display = 'none';
+                        noImageText.style.display = 'block';
+                        imageData = null;
+                        imageUpload.value = '';
+                    } else {
+                        alert('Fehler beim Löschen des Bildes!');
+                    }
+                });
+            }
+        }
+
+        // Lade aktuelle Werte
+        window.onload = function() {
+            fetch('/network-values')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('apname').value = data.apname || 'LED-Badge';
+                document.getElementById('appassword').value = data.appassword || '';
+                document.getElementById('wifiSSID').value = data.wifiSSID || '';
+                document.getElementById('wifiPassword').value = data.wifiPassword || '';
+                document.getElementById('wifiEnabled').value = data.wifiEnabled || 'true';
+                document.getElementById('macaddress').value = data.macAddress || '';
+                document.getElementById('deviceid').value = data.deviceID || '';
+                document.getElementById('otaEnabled').value = data.otaEnabled || 'true';
+                document.getElementById('currentVersion').value = data.currentVersion || 'Unbekannt';
+                document.getElementById('otaStatus').value = data.otaStatus || 'Nicht verbunden';
+            });
+        }
+
+        function checkForUpdates() {
+            const button = document.querySelector('button[onclick="checkForUpdates()"]');
+            button.textContent = 'Prüfe Updates...';
+            button.disabled = true;
+            
+            fetch('/check-updates', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                if(result.success) {
+                    if(result.updateAvailable) {
+                        if(confirm('Update verfügbar! Möchten Sie es jetzt installieren?')) {
+                            installUpdate();
+                        } else {
+                            button.textContent = 'Updates prüfen und installieren';
+                            button.disabled = false;
+                        }
+                    } else {
+                        alert('Kein Update verfügbar.');
+                        button.textContent = 'Updates prüfen und installieren';
+                        button.disabled = false;
+                    }
+                } else {
+                    alert('Fehler beim Prüfen der Updates: ' + result.message);
+                    button.textContent = 'Updates prüfen und installieren';
+                    button.disabled = false;
+                }
+            })
+            .catch(error => {
+                alert('Fehler beim Prüfen der Updates: ' + error);
+                button.textContent = 'Updates prüfen und installieren';
+                button.disabled = false;
+            });
+        }
+
+        function installUpdate() {
+            const button = document.querySelector('button[onclick="checkForUpdates()"]');
+            button.textContent = 'Installiere Update...';
+            
+            fetch('/install-update', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                if(result.success) {
+                    alert('Update wird installiert. Das Gerät startet neu...');
+                    // Warte kurz und dann zur Startseite
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 3000);
+                } else {
+                    alert('Fehler beim Installieren: ' + result.message);
+                    button.textContent = 'Updates prüfen und installieren';
+                    button.disabled = false;
+                }
+            })
+            .catch(error => {
+                alert('Fehler beim Installieren: ' + error);
+                button.textContent = 'Updates prüfen und installieren';
+                button.disabled = false;
+            });
+        }
+
+        function updateNetwork() {
+            const data = {
+                apname: document.getElementById('apname').value,
+                appassword: document.getElementById('appassword').value,
+                wifiSSID: document.getElementById('wifiSSID').value,
+                wifiPassword: document.getElementById('wifiPassword').value,
+                wifiEnabled: document.getElementById('wifiEnabled').value,
+                otaEnabled: document.getElementById('otaEnabled').value
+            };
+
+            fetch('/update-network', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.text())
+            .then(result => {
+                if(result === 'OK') {
+                    alert('Netzwerk wird aktualisiert. Bitte verbinden Sie sich neu mit dem Badge.');
+                } else {
+                    alert('Fehler beim Aktualisieren!');
+                }
             });
         }
     </script>
@@ -757,6 +1207,38 @@ const char network_html[] PROGMEM = R"rawliteral(
         <h1>Netzwerk Konfiguration</h1>
         
         <div class="card">
+            <h3 style="color: #00ff88; margin-top: 0;">Device Information</h3>
+            <div class="control-group">
+                <label>MAC-Adresse</label>
+                <input type="text" id="macaddress" readonly style="background: #303030;">
+            </div>
+            <div class="control-group">
+                <label>Device-ID (OTA)</label>
+                <input type="text" id="deviceid" readonly style="background: #303030;">
+            </div>
+        </div>
+
+        <div class="card">
+            <h3 style="color: #00ff88; margin-top: 0;">WiFi Client (STA) Einstellungen</h3>
+            <div class="control-group">
+                <label for="wifiEnabled">WiFi-Verbindung aktiviert</label>
+                <select id="wifiEnabled" style="width: 100%; padding: 8px; border-radius: 5px; background: #404040; color: white; border: 1px solid #00ff88;">
+                    <option value="true">Ja</option>
+                    <option value="false">Nein</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="wifiSSID">WiFi Netzwerkname (SSID)</label>
+                <input type="text" id="wifiSSID" maxlength="32" placeholder="WiFi Netzwerkname">
+            </div>
+            <div class="control-group">
+                <label for="wifiPassword">WiFi Passwort</label>
+                <input type="password" id="wifiPassword" maxlength="64" placeholder="WiFi Passwort">
+            </div>
+        </div>
+
+        <div class="card">
+            <h3 style="color: #00ff88; margin-top: 0;">Access Point (AP) Einstellungen</h3>
             <div class="control-group">
                 <label for="apname">Access Point Name</label>
                 <input type="text" id="apname" maxlength="31" value="LED-Badge">
@@ -767,6 +1249,28 @@ const char network_html[] PROGMEM = R"rawliteral(
             <div class="control-group">
                 <label for="appassword">Access Point Passwort (optional)</label>
                 <input type="password" id="appassword" maxlength="63" placeholder="Leer lassen für offenen AP">
+            </div>
+        </div>
+
+        <div class="card">
+            <h3 style="color: #00ff88; margin-top: 0;">OTA Update Einstellungen</h3>
+            <div class="control-group">
+                <label for="otaEnabled">Automatische Updates aktiviert</label>
+                <select id="otaEnabled" style="width: 100%; padding: 8px; border-radius: 5px; background: #404040; color: white; border: 1px solid #00ff88;">
+                    <option value="true">Ja</option>
+                    <option value="false">Nein</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label>Aktuelle Firmware Version</label>
+                <input type="text" id="currentVersion" readonly style="background: #303030;">
+            </div>
+            <div class="control-group">
+                <label>OTA Server Status</label>
+                <input type="text" id="otaStatus" readonly style="background: #303030;">
+            </div>
+            <div class="control-group">
+                <button onclick="checkForUpdates()" style="background: #00ff88; color: #1a1a1a; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; margin-bottom: 10px;">Updates prüfen und installieren</button>
             </div>
         </div>
 
@@ -783,13 +1287,95 @@ const char network_html[] PROGMEM = R"rawliteral(
             .then(data => {
                 document.getElementById('apname').value = data.apname || 'LED-Badge';
                 document.getElementById('appassword').value = data.appassword || '';
+                document.getElementById('wifiSSID').value = data.wifiSSID || '';
+                document.getElementById('wifiPassword').value = data.wifiPassword || '';
+                document.getElementById('wifiEnabled').value = data.wifiEnabled ? 'true' : 'false';
+                document.getElementById('macaddress').value = data.macAddress || '';
+                document.getElementById('deviceid').value = data.deviceID || '';
+                document.getElementById('otaEnabled').value = data.otaEnabled ? 'true' : 'false';
+                document.getElementById('currentVersion').value = data.currentVersion || 'Unbekannt';
+                document.getElementById('otaStatus').value = data.otaStatus || 'Nicht verbunden';
+            });
+        }
+
+        function checkForUpdates() {
+            const button = document.querySelector('button[onclick="checkForUpdates()"]');
+            button.textContent = 'Prüfe Updates...';
+            button.disabled = true;
+            
+            fetch('/check-updates', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                if(result.success) {
+                    if(result.updateAvailable) {
+                        if(confirm('Update verfügbar! Möchten Sie es jetzt installieren?')) {
+                            installUpdate();
+                        } else {
+                            button.textContent = 'Updates prüfen und installieren';
+                            button.disabled = false;
+                        }
+                    } else {
+                        alert('Kein Update verfügbar.');
+                        button.textContent = 'Updates prüfen und installieren';
+                        button.disabled = false;
+                    }
+                } else {
+                    alert('Fehler beim Prüfen der Updates: ' + result.message);
+                    button.textContent = 'Updates prüfen und installieren';
+                    button.disabled = false;
+                }
+            })
+            .catch(error => {
+                alert('Fehler beim Prüfen der Updates: ' + error);
+                button.textContent = 'Updates prüfen und installieren';
+                button.disabled = false;
+            });
+        }
+
+        function installUpdate() {
+            const button = document.querySelector('button[onclick="checkForUpdates()"]');
+            button.textContent = 'Installiere Update...';
+            
+            fetch('/install-update', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                if(result.success) {
+                    alert('Update wird installiert. Das Gerät startet neu...');
+                    // Warte kurz und dann zur Startseite
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 3000);
+                } else {
+                    alert('Fehler beim Installieren: ' + result.message);
+                    button.textContent = 'Updates prüfen und installieren';
+                    button.disabled = false;
+                }
+            })
+            .catch(error => {
+                alert('Fehler beim Installieren: ' + error);
+                button.textContent = 'Updates prüfen und installieren';
+                button.disabled = false;
             });
         }
 
         function updateNetwork() {
             const data = {
                 apname: document.getElementById('apname').value,
-                appassword: document.getElementById('appassword').value
+                appassword: document.getElementById('appassword').value,
+                wifiSSID: document.getElementById('wifiSSID').value,
+                wifiPassword: document.getElementById('wifiPassword').value,
+                wifiEnabled: document.getElementById('wifiEnabled').value,
+                otaEnabled: document.getElementById('otaEnabled').value
             };
 
             fetch('/update-network', {
@@ -1000,8 +1586,20 @@ const char display_html[] PROGMEM = R"rawliteral(
         
         <div class="card">
             <div class="control-group">
-                <label for="name">Name (wird in Rot angezeigt)</label>
+                <label for="name">Badge Name / Besitzer</label>
                 <input type="text" id="name" maxlength="31" value="ArdyMoon">
+            </div>
+            <div class="control-group">
+                <div class="toggle-container">
+                    <label>Name in Rot anzeigen</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="nameColorRed" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <p style="font-size: 12px; color: #aaa; margin-top: 5px;">
+                    Aus: Name wird Weiss angezeigt 
+                </p>
             </div>
         </div>
 
@@ -1028,11 +1626,15 @@ const char display_html[] PROGMEM = R"rawliteral(
                 </div>
                 <div class="file-upload">
                     <input type="file" class="file-upload-input" id="imageUpload" accept="image/*">
-                    <div class="file-upload-button">Bild auswählen</div>
+                    <div class="file-upload-button">Bild auswahl</div>
                 </div>
+                <button class="clear-button" onclick="deleteImage()" style="background: #ff4444 !important; margin-top: 10px;">Bild entfernen</button>
                 <p style="font-size: 12px; color: #aaa; margin-top: 5px;">
-                    Hinweis: Für beste Ergebnisse lade ein 64x64 Pixel großes Schwarz-Weiß-Bild hoch. 
-                    Unterstützte Formate: JPG, PNG. Bilder werden auf dem Display nur als Platzhalter angezeigt.
+                    <strong>Bild-Upload-Anleitung:</strong><br>
+                    • Optimale Pixel: 64x64 Pixel<br>
+                    • Unterstuetzte Formate: BMP<br>
+                    • Online-Konverter: <a href="https://convertio.co/de/jpg-bmp/" target="_blank" style="color: #00ff88;">convertio.co</a><br>
+                    • Das Bild wird rechts unter der Trennlinie angezeigt
                 </p>
             </div>
         </div>
@@ -1092,6 +1694,7 @@ const char display_html[] PROGMEM = R"rawliteral(
                 document.getElementById('description').value = data.description;
                 document.getElementById('telegram').value = data.telegram;
                 document.getElementById('invertColors').checked = data.invertColors;
+                document.getElementById('nameColorRed').checked = data.nameColorRed !== undefined ? data.nameColorRed : true;
                 
                 // Bild laden, falls vorhanden
                 if (data.imagePath) {
@@ -1121,9 +1724,50 @@ const char display_html[] PROGMEM = R"rawliteral(
             const description = document.getElementById('description').value;
             const telegram = document.getElementById('telegram').value;
             const invertColors = document.getElementById('invertColors').checked;
+            const nameColorRed = document.getElementById('nameColorRed').checked;
             
+            // Erst das Bild hochladen, falls vorhanden
+            if (imageData) {
+                const formData = new FormData();
+                
+                // Konvertiere Base64 zu Blob
+                const byteCharacters = atob(imageData.split(',')[1]);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], {type: 'image/jpeg'});
+                
+                formData.append('image', blob, 'badge_image.jpg');
+                
+                fetch('/upload-image', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.text())
+                .then(result => {
+                    if(result === 'OK') {
+                        console.log('Bild erfolgreich hochgeladen');
+                        // Nach erfolgreichem Bild-Upload die anderen Daten aktualisieren
+                        updateDisplayData(name, description, telegram, invertColors, nameColorRed);
+                    } else {
+                        alert('Fehler beim Hochladen des Bildes!');
+                    }
+                })
+                .catch(error => {
+                    console.error('Fehler beim Bild-Upload:', error);
+                    alert('Fehler beim Hochladen des Bildes!');
+                });
+            } else {
+                // Kein Bild, direkt die Daten aktualisieren
+                updateDisplayData(name, description, telegram, invertColors, nameColorRed);
+            }
+        }
+        
+        function updateDisplayData(name, description, telegram, invertColors, nameColorRed) {
             // Verwende ein einfaches GET wie beim simple-update Endpunkt, der funktioniert
-            const url = `/simple-update?name=${encodeURIComponent(name)}&description=${encodeURIComponent(description)}&telegram=${encodeURIComponent(telegram)}&invert=${invertColors ? '1' : '0'}`;
+            const url = `/simple-update?name=${encodeURIComponent(name)}&description=${encodeURIComponent(description)}&telegram=${encodeURIComponent(telegram)}&invert=${invertColors ? '1' : '0'}&nameRed=${nameColorRed ? '1' : '0'}`;
             
             fetch(url)
             .then(response => response.text())
@@ -1169,6 +1813,7 @@ const char display_html[] PROGMEM = R"rawliteral(
                     document.getElementById('description').value = '';
                     document.getElementById('telegram').value = '';
                     document.getElementById('invertColors').checked = false;
+                    document.getElementById('nameColorRed').checked = true;  // Standard: Rot
                     previewImg.style.display = 'none';
                     noImageText.style.display = 'block';
                     imageData = null;
@@ -1178,6 +1823,24 @@ const char display_html[] PROGMEM = R"rawliteral(
                 }
             });
         }
+
+        function deleteImage() {
+            if (confirm('Bild wirklich löschen?')) {
+                fetch('/delete-image')
+                .then(response => response.text())
+                .then(result => {
+                    if(result === 'OK') {
+                        alert('Bild wurde erfolgreich gelöscht!');
+                        previewImg.style.display = 'none';
+                        noImageText.style.display = 'block';
+                        imageData = null;
+                        imageUpload.value = '';
+                    } else {
+                        alert('Fehler beim Löschen des Bildes!');
+                    }
+                });
+            }
+        }
     </script>
 </body>
 </html>
@@ -1185,6 +1848,8 @@ const char display_html[] PROGMEM = R"rawliteral(
 
 // Webserver-Task zum Starten des Servers auf einem separaten Core
 void webServerTask(void *parameter) {
+    Serial.println("WebServer Task gestartet auf Core: " + String(xPortGetCoreID()));
+    
     delay(1000); // Verzögerung zum Stabilisieren des Systems
     
     // Starte den Server
@@ -1201,9 +1866,49 @@ void webServerTask(void *parameter) {
         addEspLog("Unbekannter Fehler beim WebServer-Start");
     }
     
+    // Task-spezifische Variablen für Monitoring
+    unsigned long lastMemoryCheck = 0;
+    unsigned long taskStartTime = millis();
+    uint32_t loopCounter = 0;
+    
     // Task bleibt aktiv und bearbeitet WebServer-Events
     for(;;) {
-        delay(1000);
+        unsigned long currentTime = millis();
+        
+        // Memory-Check alle 2 Minuten
+        if (currentTime - lastMemoryCheck > 120000) {
+            lastMemoryCheck = currentTime;
+            size_t freeHeap = ESP.getFreeHeap();
+            Serial.printf("WebServer Task - Freier Heap: %d bytes, Loops: %d\n", freeHeap, loopCounter);
+            
+            // Bei kritisch wenig Speicher: Cleanup
+            if (freeHeap < 15000) {
+                Serial.println("WebServer: Kritisch wenig Speicher - führe Cleanup durch");
+                
+                // Log-Arrays begrenzen
+                if (espLogs.size() > 50) {
+                    espLogs.erase(espLogs.begin(), espLogs.begin() + 25);
+                }
+                if (bqLogs.size() > 50) {
+                    bqLogs.erase(bqLogs.begin(), bqLogs.begin() + 25);
+                }
+                
+                // Kurze Pause für Garbage Collection
+                vTaskDelay(pdMS_TO_TICKS(200));
+            }
+            
+            loopCounter = 0; // Reset counter
+        }
+        
+        loopCounter++;
+        
+        // Längere Delays für WebServer Task (weniger kritisch als LED Task)
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        
+        // Task-Yield alle 10 Loops für bessere Core-Balance
+        if (loopCounter % 10 == 0) {
+            taskYIELD();
+        }
     }
 }
 
@@ -1212,10 +1917,26 @@ void initWebServer() {
         Serial.println("Konfiguriere WebServer...");
         addEspLog("Starte WebServer-Konfiguration");
         
+        // mDNS initialisieren für badge.local
+        Serial.println("Initialisiere mDNS...");
+        if (MDNS.begin("badge")) {
+            Serial.println("mDNS gestartet! Badge erreichbar unter: badge.local");
+            addEspLog("mDNS gestartet: badge.local");
+        } else {
+            Serial.println("Fehler beim Starten von mDNS");
+            addEspLog("Fehler beim Starten von mDNS");
+        }
+        
         // Server-Konfiguration
         DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
         DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT");
         DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
+        
+        // DEBUG: Alle HTTP-Requests loggen
+        server.onNotFound([](AsyncWebServerRequest *request){
+            Serial.printf("🔍 HTTP-Request: %s %s\n", request->methodToString(), request->url().c_str());
+            request->send(404, "text/plain", "Not Found");
+        });
         
         // ElegantOTA initialisieren
         Serial.println("Initialisiere ElegantOTA...");
@@ -1228,6 +1949,41 @@ void initWebServer() {
             request->send(200, "text/html", index_html);
         });
 
+        // DIAGNOSE: Einfache Test-Route
+        server.on("/test", HTTP_GET, [](AsyncWebServerRequest *request){
+            Serial.println("🔍 TEST-Route aufgerufen!");
+            addEspLog("TEST-Route aufgerufen - WebServer funktioniert!");
+            request->send(200, "text/plain", "WebServer funktioniert! Timestamp: " + String(millis()));
+        });
+
+        // DIAGNOSE: Einfache Akku-Test-Route (ohne BQ25895)
+        server.on("/battery-test", HTTP_GET, [](AsyncWebServerRequest *request){
+            Serial.println("🔍 /battery-test Route aufgerufen");
+            String response = "{";
+            response += "\"vbat\":4.12,";
+            response += "\"vsys\":4.10,";
+            response += "\"vbus\":5.00,";
+            response += "\"ichg\":250,";
+            response += "\"iin\":150,";
+            response += "\"power\":1.030,";
+            response += "\"percentage\":85,";
+            response += "\"temperature\":\"Normal\",";
+            response += "\"chargeStatus\":\"Test-Modus\",";
+            response += "\"isCharging\":true";
+            response += "}";
+            request->send(200, "application/json", response);
+        });
+
+        // DIAGNOSE: Einfache Log-Test-Route
+        server.on("/logs-test", HTTP_GET, [](AsyncWebServerRequest *request){
+            Serial.println("🔍 /logs-test Route aufgerufen");
+            String response = "{";
+            response += "\"esp\":[\"Test ESP Log 1\",\"Test ESP Log 2\"],";
+            response += "\"bq\":[\"Test BQ Log 1\",\"Test BQ Log 2\"]";
+            response += "}";
+            request->send(200, "application/json", response);
+        });
+
         // Route für die Netzwerk-Konfigurationsseite
         server.on("/network", HTTP_GET, [](AsyncWebServerRequest *request){
             request->send(200, "text/html", network_html);
@@ -1238,14 +1994,58 @@ void initWebServer() {
             request->send(200, "text/html", display_html);
         });
 
+        // DIAGNOSE: Test-Seite für Akku und Logs
+        server.on("/diagnose", HTTP_GET, [](AsyncWebServerRequest *request){
+            String html = R"rawliteral(
+<!DOCTYPE html>
+<html><head><title>Diagnose</title></head><body>
+<h1>Diagnose-Seite</h1>
+<button onclick="testBattery()">Test Akku-Route</button>
+<button onclick="testLogs()">Test Log-Route</button>
+<button onclick="testRealBattery()">Test Echte Akku-Route</button>
+<button onclick="testRealLogs()">Test Echte Log-Route</button>
+<div id="results"></div>
+<script>
+function testBattery() {
+    fetch('/battery-test')
+    .then(r => r.json())
+    .then(d => document.getElementById('results').innerHTML = '<h3>Akku-Test:</h3><pre>' + JSON.stringify(d, null, 2) + '</pre>')
+    .catch(e => document.getElementById('results').innerHTML = '<h3>Akku-Test FEHLER:</h3>' + e);
+}
+function testLogs() {
+    fetch('/logs-test')
+    .then(r => r.json())
+    .then(d => document.getElementById('results').innerHTML = '<h3>Log-Test:</h3><pre>' + JSON.stringify(d, null, 2) + '</pre>')
+    .catch(e => document.getElementById('results').innerHTML = '<h3>Log-Test FEHLER:</h3>' + e);
+}
+function testRealBattery() {
+    fetch('/battery-status')
+    .then(r => r.json())
+    .then(d => document.getElementById('results').innerHTML = '<h3>Echte Akku-Daten:</h3><pre>' + JSON.stringify(d, null, 2) + '</pre>')
+    .catch(e => document.getElementById('results').innerHTML = '<h3>Echte Akku-Daten FEHLER:</h3>' + e);
+}
+function testRealLogs() {
+    fetch('/get-logs')
+    .then(r => r.json())
+    .then(d => document.getElementById('results').innerHTML = '<h3>Echte Log-Daten:</h3><pre>' + JSON.stringify(d, null, 2) + '</pre>')
+    .catch(e => document.getElementById('results').innerHTML = '<h3>Echte Log-Daten FEHLER:</h3>' + e);
+}
+</script>
+</body></html>
+)rawliteral";
+            request->send(200, "text/html", html);
+        });
+
         // Route für die aktuellen Werte
         server.on("/values", HTTP_GET, [](AsyncWebServerRequest *request){
-            StaticJsonDocument<200> doc;
-            doc["mode"] = gCurrentMode;
-            doc["brightness"] = BRIGHTNESS;
-            doc["speed"] = animationSpeed;
+            StaticJsonDocument<300> doc;
+            doc["mode"] = currentMode;
+            doc["brightness"] = brightness;
+            doc["speed"] = animSpeed;
             doc["sensitivity"] = NOISE_LEVEL;
             doc["frequency"] = micFrequency;
+            doc["primaryColor"] = primaryHue;
+            doc["secondaryColor"] = secondaryHue;
             doc["ledsEnabled"] = ledsEnabled;
 
             String response;
@@ -1255,10 +2055,56 @@ void initWebServer() {
 
         // Route für die Netzwerk-Werte
         server.on("/network-values", HTTP_GET, [](AsyncWebServerRequest *request){
-            StaticJsonDocument<200> doc;
+            StaticJsonDocument<512> doc;
             doc["apname"] = apName;
             doc["appassword"] = apPassword;
+            doc["wifiSSID"] = wifiSSID;
+            doc["wifiPassword"] = wifiPassword;
+            doc["wifiEnabled"] = wifiConnectEnabled;
+            doc["macAddress"] = WiFi.macAddress();
+            doc["deviceID"] = deviceID;
+            doc["otaEnabled"] = settings.otaEnabled;
+            doc["currentVersion"] = dynamicVersion.length() > 0 ? dynamicVersion : String(firmwareVersion);
+            
+            // OTA-Server-Status prüfen
+            String otaStatus = "Nicht verbunden";
+            if (wifiConnectEnabled && WiFi.status() == WL_CONNECTED) {
+                otaStatus = "WiFi verbunden";
+                // TODO: Echter Server-Check kann später hinzugefügt werden
+            }
+            doc["otaStatus"] = otaStatus;
 
+            String response;
+            serializeJson(doc, response);
+            request->send(200, "application/json", response);
+        });
+
+        // Route für Update-Prüfung
+        server.on("/check-updates", HTTP_POST, [](AsyncWebServerRequest *request){
+            Serial.println("Update-Prüfung angefordert");
+            addEspLog("Update-Prüfung angefordert");
+            
+            // Antwort senden - Update-Prüfung erfolgt automatisch alle 10 Sekunden
+            StaticJsonDocument<200> doc;
+            doc["success"] = true;
+            doc["updateAvailable"] = false;
+            doc["message"] = "Update-Prüfung wird beim nächsten automatischen Check durchgeführt";
+            
+            String response;
+            serializeJson(doc, response);
+            request->send(200, "application/json", response);
+        });
+
+        // Route für Update-Installation
+        server.on("/install-update", HTTP_POST, [](AsyncWebServerRequest *request){
+            Serial.println("Update-Installation angefordert");
+            addEspLog("Update-Installation angefordert");
+            
+            // Antwort senden - Update-Installation erfolgt automatisch wenn verfügbar
+            StaticJsonDocument<200> doc;
+            doc["success"] = true;
+            doc["message"] = "Update-Installation wird beim nächsten automatischen Check durchgeführt";
+            
             String response;
             serializeJson(doc, response);
             request->send(200, "application/json", response);
@@ -1272,6 +2118,7 @@ void initWebServer() {
             doc["telegram"] = displayContent.telegram;
             doc["imagePath"] = displayContent.imagePath;
             doc["invertColors"] = displayContent.invertColors;
+            doc["nameColorRed"] = displayContent.nameColorRed;
 
             String response;
             serializeJson(doc, response);
@@ -1291,6 +2138,57 @@ void initWebServer() {
             request->send(200, "text/html", html);
         });
 
+        // Route für Reboot-Befehl (für OTA Server)
+        server.on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest *request){
+            Serial.println("Reboot-Befehl empfangen!");
+            addEspLog("Reboot-Befehl von OTA Server empfangen");
+            
+            // Sofortige Antwort senden
+            request->send(200, "application/json", "{\"status\":\"rebooting\"}");
+            
+            // Timer für verzögerten Reboot setzen
+            xTaskCreate([](void* parameter) {
+                vTaskDelay(pdMS_TO_TICKS(1000)); // 1 Sekunde warten
+                ESP.restart();
+                vTaskDelete(NULL);
+            }, "reboot_task", 2048, NULL, 1, NULL);
+        });
+
+        // Alternative GET-Route für Reboot (einfacher)
+        server.on("/api/reboot", HTTP_GET, [](AsyncWebServerRequest *request){
+            Serial.println("Reboot-Befehl (GET) empfangen!");
+            addEspLog("Reboot-Befehl (GET) von OTA Server empfangen");
+            
+            // Sofortige Antwort senden
+            request->send(200, "application/json", "{\"status\":\"rebooting\"}");
+            
+            // Timer für verzögerten Reboot setzen
+            xTaskCreate([](void* parameter) {
+                vTaskDelay(pdMS_TO_TICKS(1000)); // 1 Sekunde warten
+                ESP.restart();
+                vTaskDelete(NULL);
+            }, "reboot_task", 2048, NULL, 1, NULL);
+        });
+
+        // Einfache Reboot-Route ohne Timer (direkt)
+        server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest *request){
+            Serial.println("Einfacher Reboot-Befehl empfangen!");
+            addEspLog("Einfacher Reboot-Befehl empfangen");
+            
+            // Antwort senden und sofort rebooten
+            request->send(200, "text/plain", "Rebooting...");
+            
+            // Kurze Verzögerung für die Antwort
+            delay(100);
+            ESP.restart();
+        });
+
+        // Test-Route für Erreichbarkeit
+        server.on("/ping", HTTP_GET, [](AsyncWebServerRequest *request){
+            Serial.println("Ping-Anfrage empfangen!");
+            request->send(200, "application/json", "{\"status\":\"ok\",\"device\":\"" + deviceID + "\"}");
+        });
+
         // Route für Einstellungs-Updates
         server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request){
             if (request->hasParam("param") && request->hasParam("value")) {
@@ -1298,20 +2196,35 @@ void initWebServer() {
                 String value = request->getParam("value")->value();
                 
                 if (param == "mode") {
-                    gCurrentMode = value.toInt();
+                    currentMode = value.toInt();
+                    if (currentMode > 24) currentMode = 24; // Max 25 Modi (0-24)
+                    settings.mode = currentMode;
                 } else if (param == "brightness") {
-                    BRIGHTNESS = value.toInt();
-                    if (BRIGHTNESS < 5) BRIGHTNESS = 5; // Mindesthelligkeit
-                    FastLED.setBrightness(BRIGHTNESS);
+                    brightness = value.toInt();
+                    if (brightness < 12) brightness = 12; // Mindesthelligkeit zurück auf 12
+                    FastLED.setBrightness(brightness);
+                    settings.brightness = brightness;
                 } else if (param == "speed") {
-                    animationSpeed = value.toInt();
+                    animSpeed = value.toInt();
+                    settings.animationSpeed = animSpeed;
                 } else if (param == "sensitivity") {
                     NOISE_LEVEL = value.toInt();
+                    settings.noiseLevel = NOISE_LEVEL;
                 } else if (param == "frequency") {
                     micFrequency = value.toInt();
+                    settings.micFrequency = micFrequency;
+                } else if (param == "primaryColor") {
+                    primaryHue = value.toInt();
+                    if (primaryHue > 255) primaryHue = 255;
+                    settings.primaryHue = primaryHue;  // In Settings speichern
+                } else if (param == "secondaryColor") {
+                    secondaryHue = value.toInt();
+                    if (secondaryHue > 255) secondaryHue = 255;
+                    settings.secondaryHue = secondaryHue;  // In Settings speichern
                 }
                 
                 saveSettings();
+                Serial.printf("Parameter %s auf %s gesetzt\n", param.c_str(), value.c_str());
             }
             request->send(200, "text/plain", "OK");
         });
@@ -1321,22 +2234,51 @@ void initWebServer() {
             request->send(200, "text/plain", "OK");
         }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
             if (index + len == total) {
-                StaticJsonDocument<200> doc;
+                StaticJsonDocument<512> doc;
                 deserializeJson(doc, (char*)data);
                 
                 String newApName = doc["apname"].as<String>();
                 String newApPassword = doc["appassword"].as<String>();
+                String newWifiSSID = doc["wifiSSID"].as<String>();
+                String newWifiPassword = doc["wifiPassword"].as<String>();
+                bool newWifiEnabled = doc["wifiEnabled"].as<String>() == "true";
+                bool newOtaEnabled = doc["otaEnabled"].as<String>() == "true";
                 
-                Serial.print("Aktualisiere WiFi AP - Name: ");
-                Serial.print(newApName);
-                Serial.print(", Passwort: ");
-                Serial.println(newApPassword.length() > 0 ? "[gesetzt]" : "[leer]");
+                Serial.println("Aktualisiere Netzwerk-Einstellungen:");
+                Serial.print("AP Name: "); Serial.println(newApName);
+                Serial.print("AP Passwort: "); Serial.println(newApPassword.length() > 0 ? "[gesetzt]" : "[leer]");
+                Serial.print("WiFi SSID: "); Serial.println(newWifiSSID);
+                Serial.print("WiFi Passwort: "); Serial.println(newWifiPassword.length() > 0 ? "[gesetzt]" : "[leer]");
+                Serial.print("WiFi aktiviert: "); Serial.println(newWifiEnabled ? "Ja" : "Nein");
+                Serial.print("OTA aktiviert: "); Serial.println(newOtaEnabled ? "Ja" : "Nein");
                 
+                // Globale Variablen aktualisieren
                 apName = newApName;
                 apPassword = newApPassword;
+                wifiConnectEnabled = newWifiEnabled;
+                settings.otaEnabled = newOtaEnabled;
                 
-                // WiFi neu starten
-                WiFi.disconnect();
+                // WiFi-Einstellungen nur aktualisieren wenn sie sich geändert haben
+                if (newWifiSSID != wifiSSID || newWifiPassword != wifiPassword) {
+                    wifiSSID = newWifiSSID;
+                    wifiPassword = newWifiPassword;
+                    
+                    // Wenn WiFi aktiviert ist, versuche neue Verbindung
+                    if (wifiConnectEnabled && newWifiSSID.length() > 0) {
+                        Serial.println("Versuche neue WiFi-Verbindung...");
+                        WiFi.disconnect();
+                        WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
+                    }
+                }
+                
+                // WiFi-Modus basierend auf Einstellungen setzen
+                if (wifiConnectEnabled) {
+                    WiFi.mode(WIFI_STA);
+                } else {
+                    WiFi.mode(WIFI_AP);
+                }
+                
+                // Access Point neu starten
                 WiFi.softAP(apName.c_str(), apPassword.length() > 0 ? apPassword.c_str() : NULL);
                 
                 Serial.print("WiFi AP neu gestartet als: ");
@@ -1345,9 +2287,15 @@ void initWebServer() {
                 // Einstellungen speichern
                 settings.apName = apName;
                 settings.apPassword = apPassword;
-                saveSettings();
+                settings.wifiEnabled = wifiConnectEnabled;
+                settings.wifiSSID = wifiSSID;
+                settings.wifiPassword = wifiPassword;
+                // OTA-Einstellung wurde bereits oben gesetzt
+                bool saved = saveSettings();
+                Serial.printf("Netzwerk-Settings gespeichert: %s\n", saved ? "ERFOLG" : "FEHLER");
+                Serial.printf("OTA aktiviert: %s\n", settings.otaEnabled ? "Ja" : "Nein");
                 
-                addEspLog("Netzwerk aktualisiert: AP-Name=" + apName);
+                addEspLog("Netzwerk aktualisiert: AP=" + apName + ", WiFi=" + newWifiSSID);
             }
         });
 
@@ -1493,6 +2441,16 @@ void initWebServer() {
                             updated = true;
                         }
                         
+                        if (formStr.indexOf("nameRed=") >= 0) {
+                            int start = formStr.indexOf("nameRed=") + 7;
+                            int end = formStr.indexOf("&", start);
+                            if (end < 0) end = formStr.length();
+                            String val = formStr.substring(start, end);
+                            displayContent.nameColorRed = (val == "true" || val == "on" || val == "1");
+                            Serial.println("Alt-Parse: Name-Farbe Rot=" + String(displayContent.nameColorRed));
+                            updated = true;
+                        }
+                        
                         if (updated) {
                             Serial.println("Alternative Parsing erfolgreich. Aktualisiere Display...");
                             saveDisplayContent();
@@ -1534,46 +2492,178 @@ void initWebServer() {
             [](AsyncWebServerRequest *request) {
                 // Prüfen ob Batterie zu niedrig ist
                 if (isLowBattery) {
-                    Serial.println("Display-Update wegen niedriger Batterie abgebrochen");
-                    request->send(403, "text/plain", "Display-Update wegen niedriger Batterie nicht möglich");
+                    Serial.println("Bild-Upload wegen niedriger Batterie abgebrochen");
+                    request->send(403, "text/plain", "Bild-Upload wegen niedriger Batterie nicht möglich");
                 } else {
                     request->send(200, "text/plain", "OK");
                 }
             },
             [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-                static String imagePath = "/badge_image.bmp";
+                static String imagePath;
                 static File imageFile;
                 
-                // Unterstützte Formate: Aktuell nur raw 1-bit Bilder für Platzhalter
-                // Später zu implementieren: BMP, JPEG oder PNG mit 64x64 Pixel
-                
                 if(!index) {
-                    Serial.println("Starte Bildupload...");
-                    if(SPIFFS.exists(imagePath)) {
-                        SPIFFS.remove(imagePath);
+                    Serial.println("Starte Bild-Upload: " + filename);
+                    addEspLog("Starte Bild-Upload: " + filename);
+                    
+                    // Debug: Erste Bytes ausgeben
+                    if (len >= 10) {
+                        Serial.printf("🔍 Erste 10 Bytes: ");
+                        for (int i = 0; i < 10; i++) {
+                            Serial.printf("0x%02X ", data[i]);
+                        }
+                        Serial.println();
+                        addEspLog("Erste Bytes: " + String(data[0], HEX) + " " + String(data[1], HEX) + " " + String(data[2], HEX));
                     }
+                    
+                    // Dateiformat basierend auf Inhalt (Header) oder Dateiname erkennen
+                    // WICHTIG: Header-Erkennung hat Vorrang vor Dateiname!
+                    String extension = "";
+                    
+                    // Zuerst: Header-basierte Erkennung (hat Vorrang!)
+                    if (len >= 2 && data[0] == 0x42 && data[1] == 0x4D) { // 'B' = 0x42, 'M' = 0x4D
+                        extension = ".bmp";
+                        Serial.println("🖼️ BMP-Format anhand Header erkannt (0x42 0x4D) - VORRANG!");
+                        addEspLog("BMP-Format anhand Header erkannt - VORRANG!");
+                    } else if (len >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) {
+                        extension = ".jpg";
+                        Serial.println("🖼️ JPG-Format anhand Header erkannt (0xFF 0xD8 0xFF) - VORRANG!");
+                        addEspLog("JPG-Format anhand Header erkannt - VORRANG!");
+                    } 
+                    // Nur wenn Header-Erkennung fehlschlägt: Dateiname verwenden
+                    else if (filename.endsWith(".bmp") || filename.endsWith(".BMP")) {
+                        extension = ".bmp";
+                        Serial.println("🖼️ BMP-Datei erkannt (Dateiname als Fallback)");
+                        addEspLog("BMP-Datei erkannt (Dateiname als Fallback)");
+                    } else if (filename.endsWith(".jpg") || filename.endsWith(".jpeg") || 
+                               filename.endsWith(".JPG") || filename.endsWith(".JPEG")) {
+                        extension = ".jpg";
+                        Serial.println("🖼️ JPG-Datei erkannt (Dateiname als Fallback)");
+                        addEspLog("JPG-Datei erkannt (Dateiname als Fallback)");
+                    } else {
+                        // Letzter Fallback: .bmp für bessere Kompatibilität
+                        extension = ".bmp";
+                        Serial.println("⚠️ Unbekanntes Format, verwende .bmp als Fallback");
+                        addEspLog("Unbekanntes Format, verwende .bmp als Fallback");
+                    }
+                    
+                    imagePath = "/badge_image" + extension;
+                    Serial.println("📁 Speichere als: " + imagePath);
+                    addEspLog("Speichere als: " + imagePath);
+                    
+                    // Alte Bilddateien löschen (sowohl .jpg als auch .bmp)
+                    if(SPIFFS.exists("/badge_image.jpg")) {
+                        SPIFFS.remove("/badge_image.jpg");
+                        Serial.println("Alte JPG-Bilddatei gelöscht");
+                        addEspLog("Alte JPG-Bilddatei gelöscht");
+                    }
+                    if(SPIFFS.exists("/badge_image.bmp")) {
+                        SPIFFS.remove("/badge_image.bmp");
+                        Serial.println("Alte BMP-Bilddatei gelöscht");
+                        addEspLog("Alte BMP-Bilddatei gelöscht");
+                    }
+                    
+                    // Neue Datei zum Schreiben öffnen
                     imageFile = SPIFFS.open(imagePath, "w");
                     if (!imageFile) {
-                        Serial.println("Fehler beim Öffnen der Bilddatei zum Schreiben");
-                    } else {
-                        Serial.println("Datei zum Schreiben geöffnet");
+                        Serial.println("FEHLER: Kann Bilddatei nicht zum Schreiben öffnen");
+                        addEspLog("FEHLER: Kann Bilddatei nicht zum Schreiben öffnen");
+                        return;
                     }
+                    Serial.println("Bilddatei zum Schreiben geöffnet: " + imagePath);
+                    addEspLog("Bilddatei zum Schreiben geöffnet: " + imagePath);
                 }
                 
                 if(imageFile) {
-                    Serial.printf("Bildupload: %d Bytes empfangen\n", len);
-                    if (imageFile.write(data, len) != len) {
-                        Serial.println("Fehler beim Schreiben der Bilddaten");
+                    size_t written = imageFile.write(data, len);
+                    if (written != len) {
+                        Serial.printf("WARNUNG: Nur %d von %d Bytes geschrieben\n", written, len);
+                        addEspLog("WARNUNG: Nur " + String(written) + " von " + String(len) + " Bytes geschrieben");
                     }
                 }
                 
                 if(final) {
-                    Serial.println("Bildupload abgeschlossen");
-                    imageFile.close();
-                    displayContent.imagePath = imagePath;
-                    saveDisplayContent();
+                    if(imageFile) {
+                        imageFile.close();
+                        Serial.printf("Bild-Upload abgeschlossen: %d Bytes\n", index + len);
+                        addEspLog("Bild-Upload abgeschlossen: " + String(index + len) + " Bytes");
+                        
+                        // Bildpfad in displayContent speichern
+                        displayContent.imagePath = imagePath;
+                        Serial.println("Bildpfad in displayContent gespeichert: " + imagePath);
+                        addEspLog("Bildpfad in displayContent gespeichert: " + imagePath);
+                        
+                        // WICHTIG: Speichern OHNE automatisches Update, da wir manuell ein Update senden
+                        saveDisplayContent(false);  // Verhindert doppeltes Update!
+                        
+                        // Manuelles Display-Update senden
+                        if (displayAvailable && displayQueue != NULL) {
+                            Serial.println("Sende manuelles Display-Update nach Bild-Upload");
+                            addEspLog("Sende manuelles Display-Update nach Bild-Upload");
+                            DisplayCommand cmd = CMD_UPDATE;
+                            if (xQueueSend(displayQueue, &cmd, pdMS_TO_TICKS(1000)) == pdPASS) {
+                                Serial.println("✅ Display-Update erfolgreich gesendet");
+                                addEspLog("✅ Display-Update erfolgreich gesendet");
+                            } else {
+                                Serial.println("❌ Display-Update konnte nicht gesendet werden");
+                                addEspLog("❌ Display-Update konnte nicht gesendet werden");
+                            }
+                        }
+                        
+                        Serial.println("Bildpfad gespeichert und Display-Update gesendet: " + imagePath);
+                    } else {
+                        Serial.println("FEHLER: Bilddatei war nicht geöffnet beim Abschluss");
+                        addEspLog("FEHLER: Bilddatei war nicht geöffnet beim Abschluss");
+                    }
                 }
             });
+
+        // Route zum Löschen des Bildes
+        server.on("/delete-image", HTTP_GET, [](AsyncWebServerRequest *request){
+            if (isLowBattery) {
+                request->send(403, "text/plain", "Bild-Löschung wegen niedriger Batterie nicht möglich");
+                return;
+            }
+            
+            bool success = false;
+            
+            // Beide möglichen Bilddateien löschen
+            if(SPIFFS.exists("/badge_image.jpg")) {
+                if(SPIFFS.remove("/badge_image.jpg")) {
+                    Serial.println("JPG-Bilddatei erfolgreich gelöscht: /badge_image.jpg");
+                    addEspLog("JPG-Bilddatei gelöscht: /badge_image.jpg");
+                    success = true;
+                } else {
+                    Serial.println("FEHLER: Konnte JPG-Bilddatei nicht löschen");
+                    addEspLog("FEHLER: Konnte JPG-Bilddatei nicht löschen");
+                }
+            }
+            
+            if(SPIFFS.exists("/badge_image.bmp")) {
+                if(SPIFFS.remove("/badge_image.bmp")) {
+                    Serial.println("BMP-Bilddatei erfolgreich gelöscht: /badge_image.bmp");
+                    addEspLog("BMP-Bilddatei gelöscht: /badge_image.bmp");
+                    success = true;
+                } else {
+                    Serial.println("FEHLER: Konnte BMP-Bilddatei nicht löschen");
+                    addEspLog("FEHLER: Konnte BMP-Bilddatei nicht löschen");
+                }
+            }
+            
+            if(!SPIFFS.exists("/badge_image.jpg") && !SPIFFS.exists("/badge_image.bmp")) {
+                Serial.println("Keine Bilddateien vorhanden - erfolgreich gelöscht");
+                success = true;
+            }
+            
+            if(success) {
+                // Bildpfad aus displayContent entfernen
+                displayContent.imagePath = "";
+                saveDisplayContent();  // Speichert und sendet CMD_UPDATE
+                request->send(200, "text/plain", "OK");
+            } else {
+                request->send(500, "text/plain", "Fehler beim Löschen");
+            }
+        });
 
         // Route für Display-Test
         server.on("/test-display", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1628,15 +2718,18 @@ void initWebServer() {
                 Serial.println("Invertiert gesetzt: " + String(displayContent.invertColors));
             }
             
-            // Speichern und Display aktualisieren
-            saveDisplayContent();
-            
-            // Direktes Update an das Display senden
-            if (displayAvailable && displayQueue != NULL) {
-                Serial.println("Sende direktes CMD_UPDATE an Display-Queue");
-                DisplayCommand cmd = CMD_UPDATE;
-                xQueueSend(displayQueue, &cmd, pdMS_TO_TICKS(1000));
+            if (request->hasParam("nameRed")) {
+                String nameRed = request->getParam("nameRed")->value();
+                displayContent.nameColorRed = (nameRed == "1" || nameRed == "true" || nameRed == "on");
+                Serial.println("Name-Farbe Rot gesetzt: " + String(displayContent.nameColorRed));
             }
+            
+            // Speichern und Display aktualisieren
+            saveDisplayContent();  // Diese Funktion sendet bereits CMD_UPDATE!
+            
+            // ENTFERNT: Doppeltes Update vermeiden
+            // Das saveDisplayContent() sendet bereits ein CMD_UPDATE an die Display-Queue
+            // Ein zweites Update hier würde zu doppelten Aktualisierungen führen
             
             request->send(200, "text/plain", "Simple Update gesendet");
         });
@@ -1653,14 +2746,50 @@ void initWebServer() {
 
         // Route für die API zur Abfrage des Akkustands
         server.on("/battery-status", HTTP_GET, [](AsyncWebServerRequest *request){
-            // Alle Messwerte auslesen
-            float vbat = charger->getVBAT();
-            float vsys = charger->getVSYS();
-            float vbus = charger->getVBUS();
-            float ichg = charger->getICHG() * 1000; // Umrechnung in mA
-            float iin = charger->getIIN() * 1000;   // Umrechnung in mA
-            String tempStatus = charger->getTemperatureStatus();
-            String chargeStatus = charger->getChargeStatus();
+            Serial.println("🔍 /battery-status Route aufgerufen");
+            
+            // KRITISCH: Prüfe ob charger initialisiert ist
+            if (charger == nullptr) {
+                Serial.println("❌ FEHLER: charger ist nullptr!");
+                // Fallback-Daten senden statt Fehler
+                String response = "{";
+                response += "\"vbat\":3.70,";
+                response += "\"vsys\":3.70,";
+                response += "\"vbus\":0.00,";
+                response += "\"ichg\":0,";
+                response += "\"iin\":0,";
+                response += "\"power\":0.000,";
+                response += "\"percentage\":50,";
+                response += "\"temperature\":\"Normal\",";
+                response += "\"chargeStatus\":\"Charger nicht verfügbar\",";
+                response += "\"isCharging\":false";
+                response += "}";
+                request->send(200, "application/json", response);
+                return;
+            }
+            
+            Serial.println("✅ Charger ist initialisiert, lese Werte aus...");
+            
+            // Alle Messwerte auslesen mit Fehlerbehandlung
+            float vbat = -1.0f, vsys = -1.0f, vbus = -1.0f, ichg = 0.0f, iin = 0.0f;
+            String tempStatus = "Unbekannt";
+            String chargeStatus = "Unbekannt";
+            
+            try {
+                vbat = charger->getVBAT();
+                vsys = charger->getVSYS();
+                vbus = charger->getVBUS();
+                ichg = charger->getICHG() * 1000; // Umrechnung in mA
+                iin = charger->getIIN() * 1000;   // Umrechnung in mA
+                tempStatus = charger->getTemperatureStatus();
+                chargeStatus = charger->getChargeStatus();
+            } catch (...) {
+                Serial.println("❌ Fehler beim Lesen der BQ25895-Werte");
+            }
+            
+            // DEBUG: Echte Werte ausgeben ohne Korrektur
+            Serial.printf("🔍 WebUI DEBUG - Rohe Messwerte: VBAT=%.3fV, VSYS=%.3fV, VBUS=%.3fV, ICHG=%.0fmA\n", 
+                         vbat, vsys, vbus, ichg);
             
             // Wichtige Register direkt auslesen
             uint8_t reg0B = charger->readRegister(0x0B); // System Status
@@ -1697,7 +2826,14 @@ void initWebServer() {
                 faultStatus = "Fehler beim Lesen";
             }
             
-            float power = vbat * (ichg / 1000); // Berechnung in Watt
+            // Plausible Werte sicherstellen
+            if (vbat < 0 || vbat > 5.0f) vbat = 3.7f; // Fallback
+            if (vsys < 0 || vsys > 5.0f) vsys = vbat; // Fallback
+            if (vbus < 0 || vbus > 20.0f) vbus = 0.0f; // Fallback
+            if (ichg < -5000 || ichg > 5000) ichg = 0.0f; // Fallback
+            if (iin < 0 || iin > 5000) iin = 0.0f; // Fallback
+            
+            float power = vbat * (abs(ichg) / 1000.0f); // Berechnung in Watt (absoluter Wert)
             
             // Batterie-Prozentsatz basierend auf Spannung berechnen
             int percentage = 0;
@@ -1706,6 +2842,8 @@ void initWebServer() {
             } else if (vbat >= 3.0f) {
                 // Lineare Interpolation zwischen 3.0V (0%) und 4.2V (100%)
                 percentage = (int)((vbat - 3.0f) * 100.0f / 1.2f);
+                if (percentage > 100) percentage = 100;
+                if (percentage < 0) percentage = 0;
             }
             
             // JSON-Antwort erstellen
@@ -1719,20 +2857,9 @@ void initWebServer() {
             response += "\"percentage\":" + String(percentage) + ",";  // Batteriestand in %
             response += "\"temperature\":\"" + tempStatus + "\",";     // Temperaturstatus
             response += "\"chargeStatus\":\"" + chargeStatus + "\",";  // Ladestatus
-            response += "\"faultStatus\":\"" + faultStatus + "\",";    // Fehlerstatus
-            response += "\"isCharging\":" + String(charger->isVBUSPresent() ? "true" : "false") + ",";
+            response += "\"isCharging\":" + String(charger->isVBUSPresent() ? "true" : "false");
             
-            // Register-Werte hinzufügen
-            response += "\"registers\":{";
-            response += "\"REG0B_Status\":" + String(reg0B) + ",";
-            response += "\"REG0C_Fault\":" + String(reg0C) + ",";
-            response += "\"REG0E_VBAT\":" + String(reg0E) + ",";
-            response += "\"REG0F_VSYS\":" + String(reg0F) + ",";
-            response += "\"REG11_VBUS\":" + String(reg11) + ",";
-            response += "\"REG12_ICHG\":" + String(reg12) + ",";
-            response += "\"REG13_IIN\":" + String(reg13) + ",";
-            response += "\"REG00_InputCtrl\":" + String(reg00);
-            response += "}";
+            // ENTFERNT: Fehler-Status und Register-Werte
             
             response += "}";
             
@@ -1751,7 +2878,7 @@ void initWebServer() {
                 // LED-Zustand ändern
                 if (ledsEnabled) {
                     // LEDs einschalten - normaler Modus
-                    FastLED.setBrightness(BRIGHTNESS);
+                    FastLED.setBrightness(brightness);
                     digitalWrite(LIGHT_EN, HIGH); // GPIO35 auf HIGH setzen wenn LEDs an
                     Serial.println("LEDs eingeschaltet");
                 } else {
@@ -1792,6 +2919,9 @@ void initWebServer() {
 
         // Route für Log-Abfrage
         server.on("/get-logs", HTTP_GET, [](AsyncWebServerRequest *request){
+            Serial.println("🔍 /get-logs Route aufgerufen");
+            Serial.printf("ESP-Logs: %d Einträge, BQ-Logs: %d Einträge\n", espLogs.size(), bqLogs.size());
+            
             StaticJsonDocument<8192> doc; // Größeres JSON-Dokument für Logs
             
             // ESP-Logs
@@ -1830,6 +2960,17 @@ void initWebServer() {
             
             request->send(200, "text/plain", "Logs gelöscht");
         });
+        
+        // Route für ESP32-Neustart
+        server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest *request){
+            request->send(200, "text/plain", "ESP32 wird neu gestartet...");
+            
+            // Kurze Verzögerung, damit die Antwort gesendet wird
+            delay(1000);
+            
+            // ESP32 neu starten
+            ESP.restart();
+        });
 
         Serial.println("WebServer-Routen konfiguriert");
         
@@ -1855,20 +2996,52 @@ void initWebServer() {
 
 // Funktion zum Hinzufügen eines ESP-Logs
 void addEspLog(const String& message) {
+    // Automatische Größenbegrenzung
     if (espLogs.size() >= MAX_LOG_ENTRIES) {
-        espLogs.erase(espLogs.begin());
+        // Entferne die ältesten 20 Einträge auf einmal für bessere Performance
+        espLogs.erase(espLogs.begin(), espLogs.begin() + 20);
     }
     
+    // Timestamp mit reduzierter Präzision für weniger Memory-Verbrauch
     String timestamp = "[" + String(millis() / 1000) + "s] ";
-    espLogs.push_back(timestamp + message);
+    
+    // String-Optimierung: Reserve Speicher im Voraus
+    String logEntry;
+    logEntry.reserve(timestamp.length() + message.length() + 5);
+    logEntry = timestamp + message;
+    
+    espLogs.push_back(logEntry);
+    
+    // Periodische Speicher-Optimierung
+    static unsigned long lastOptimization = 0;
+    if (millis() - lastOptimization > 300000) { // Alle 5 Minuten
+        lastOptimization = millis();
+        espLogs.shrink_to_fit(); // Reduziere reservierten Speicher
+    }
 }
 
 // Funktion zum Hinzufügen eines BQ25895-Logs
 void addBqLog(const String& message) {
+    // Automatische Größenbegrenzung
     if (bqLogs.size() >= MAX_LOG_ENTRIES) {
-        bqLogs.erase(bqLogs.begin());
+        // Entferne die ältesten 20 Einträge auf einmal für bessere Performance
+        bqLogs.erase(bqLogs.begin(), bqLogs.begin() + 20);
     }
     
+    // Timestamp mit reduzierter Präzision für weniger Memory-Verbrauch
     String timestamp = "[" + String(millis() / 1000) + "s] ";
-    bqLogs.push_back(timestamp + message);
+    
+    // String-Optimierung: Reserve Speicher im Voraus
+    String logEntry;
+    logEntry.reserve(timestamp.length() + message.length() + 5);
+    logEntry = timestamp + message;
+    
+    bqLogs.push_back(logEntry);
+    
+    // Periodische Speicher-Optimierung
+    static unsigned long lastOptimization = 0;
+    if (millis() - lastOptimization > 300000) { // Alle 5 Minuten
+        lastOptimization = millis();
+        bqLogs.shrink_to_fit(); // Reduziere reservierten Speicher
+    }
 } 

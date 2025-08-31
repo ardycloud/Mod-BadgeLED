@@ -32,7 +32,7 @@
 #define TELEGRAM_Y_POS 120
 #define IMAGE_SIZE 64
 #define IMAGE_X_POS (DISPLAY_WIDTH - IMAGE_SIZE - 10)  // 10 Pixel vom rechten Rand
-#define IMAGE_Y_POS (DESC_Y_POS + 5)  // 5 Pixel unter der Trennlinie
+#define IMAGE_Y_POS (DESC_Y_POS)  // Direkt bei der Trennlinie, 5 Pixel höher als vorher
 
 // Display-Objekt (2.9" WeAct b/w/r)
 using DISPLAY_TYPE = GxEPD2_3C<GxEPD2_290_C90c, GxEPD2_290_C90c::HEIGHT>;
@@ -54,6 +54,7 @@ struct DisplayContent {
     String telegram;
     String imagePath;    // Pfad zur Bilddatei in SPIFFS
     bool invertColors;   // true = schwarzer Hintergrund, rot/weißer Text
+    bool nameColorRed;   // true = Name in Rot, false = Name in Schwarz/Weiß (je nach invertColors)
 };
 
 extern DisplayContent displayContent;
@@ -79,8 +80,10 @@ void displayTask(void *parameter);
 void startDisplayTask();
 bool loadDisplayContent();
 void saveDisplayContent();
+void saveDisplayContent(bool sendUpdate);  // Neue Überladung: Optional ohne Display-Update
 void drawBatteryStatus(float voltage);
 bool uploadImage(uint8_t* imageData, size_t length);
+bool drawBitmapFromFile(const String& filePath, int16_t x, int16_t y, uint16_t fgColor, uint16_t bgColor);
 void testDisplay();
 void clearDisplay();
 

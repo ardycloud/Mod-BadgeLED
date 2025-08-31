@@ -26,6 +26,10 @@ extern uint8_t NOISE_LEVEL;
 extern uint16_t animationSpeed;
 extern uint16_t micFrequency;
 
+// Neue globale Variablen für Farbpersonalisierung
+extern uint8_t userSelectedHue;
+extern bool useCustomColor;
+
 // Display Kommandos
 enum DisplayCommand {
     CMD_INIT,
